@@ -1,6 +1,26 @@
 .DS_Store
+
+# Editors and local workspace state.
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local environment files.
+.env
+.env.*
+!.env.example
+
+# Go build and test artifacts.
 /go-format
 /dist/
 /tmp/
+bin/
 *.test
+*.out
 coverage.out
+coverage.html
+
+# Profiling and debugging output.
+*.prof
+*.pprof

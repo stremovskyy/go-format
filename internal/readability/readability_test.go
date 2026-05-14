@@ -1,6 +1,8 @@
 package readability
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -86,5 +88,27 @@ func generated(enabled bool) bool {
 
 	if string(result) != string(input) {
 		t.Fatalf("Rewrite generated changed file:\n%s", result)
+	}
+}
+
+func TestCollectFilesDeduplicatesOverlappingPaths(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "pkg", "sample.go")
+
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+
+	if err := os.WriteFile(file, []byte("package sample\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	files, err := CollectFiles([]string{root, filepath.Join(root, "..."), file}, false)
+	if err != nil {
+		t.Fatalf("CollectFiles error = %v", err)
+	}
+
+	if len(files) != 1 || files[0] != file {
+		t.Fatalf("CollectFiles = %#v, want exactly %q", files, file)
 	}
 }

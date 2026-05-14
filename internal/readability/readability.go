@@ -93,6 +93,21 @@ func CollectFiles(paths []string, includeHidden bool) ([]string, error) {
 	}
 
 	var files []string
+	seen := map[string]struct{}{}
+	addFile := func(path string) {
+		cleanPath := filepath.Clean(path)
+		key, err := filepath.Abs(cleanPath)
+		if err != nil {
+			key = cleanPath
+		}
+
+		if _, ok := seen[key]; ok {
+			return
+		}
+
+		seen[key] = struct{}{}
+		files = append(files, cleanPath)
+	}
 
 	for _, path := range paths {
 		path = normalizeRecursivePath(path)
@@ -104,7 +119,7 @@ func CollectFiles(paths []string, includeHidden bool) ([]string, error) {
 
 		if !info.IsDir() {
 			if strings.HasSuffix(path, ".go") && !isGeneratedPath(path) {
-				files = append(files, path)
+				addFile(path)
 			}
 
 			continue
@@ -120,7 +135,7 @@ func CollectFiles(paths []string, includeHidden bool) ([]string, error) {
 			}
 
 			if !entry.IsDir() && strings.HasSuffix(current, ".go") && !isGeneratedPath(current) {
-				files = append(files, current)
+				addFile(current)
 			}
 
 			return nil

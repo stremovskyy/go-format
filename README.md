@@ -56,6 +56,26 @@ Skip `golines` when only `gofmt`, `gofumpt`, and logical blank lines are wanted:
 go-format --write --skip-golines ./...
 ```
 
+Format editor input from stdin:
+
+```sh
+go-format --stdin --stdin-path internal/cli/cli.go < internal/cli/cli.go
+```
+
+List files that would change without printing diffs:
+
+```sh
+go-format --check --list --diff=false ./...
+```
+
+Print the bundled formatter versions:
+
+```sh
+go-format --version
+```
+
+More examples and before/after comparisons are in [docs/examples.md](docs/examples.md).
+
 ## Behavior
 
 `go-format` recursively discovers `.go` files under the provided paths and skips:
@@ -68,10 +88,16 @@ go-format --write --skip-golines ./...
 - hidden directories unless `--include-hidden` is set
 
 `--check` prints unified diffs and exits with status `1` when files need
-formatting. `--write` rewrites files in place.
+formatting. Use `--diff=false` to suppress diffs and `--list` to print changed
+file paths. `--write` rewrites files in place and can also use `--list`.
+
+`--stdin` formats source from standard input and writes the formatted source to
+standard output. It accepts `--stdin-path` so parse errors and formatter
+subprocesses can use a meaningful file name.
 
 The first run may download the pinned `golines` module into the local Go module
 cache. Use `--skip-golines` for environments that must avoid that subprocess.
+Use `--skip-readability` to disable only the logical blank-line pass.
 
 ## Release
 

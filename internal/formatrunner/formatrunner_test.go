@@ -194,6 +194,35 @@ func active(enabled bool) bool {
 	}
 }
 
+func TestFormatSourceCanSkipReadabilityPass(t *testing.T) {
+	input := []byte(`package sample
+
+func active(enabled bool) bool {
+	if !enabled {
+		return false
+	}
+	return true
+}
+`)
+
+	output, issues, err := FormatSource("sample.go", input, Options{
+		GoToolchain:     "local",
+		SkipGoLines:     true,
+		SkipReadability: true,
+	})
+	if err != nil {
+		t.Fatalf("FormatSource error = %v", err)
+	}
+
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v, want none when readability pass is skipped", issues)
+	}
+
+	if strings.Contains(string(output), "return false\n\t}\n\n\treturn true") {
+		t.Fatalf("output included readability blank line despite SkipReadability:\n%s", output)
+	}
+}
+
 func mustWrite(t *testing.T, path string, body string) {
 	t.Helper()
 

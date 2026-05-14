@@ -25,13 +25,14 @@ const (
 )
 
 type Options struct {
-	Mode          Mode
-	Paths         []string
-	MaxLen        int
-	GoToolchain   string
-	SkipGoLines   bool
-	DiffMaxBytes  int
-	IncludeHidden bool
+	Mode            Mode
+	Paths           []string
+	MaxLen          int
+	GoToolchain     string
+	SkipGoLines     bool
+	SkipReadability bool
+	DiffMaxBytes    int
+	IncludeHidden   bool
 }
 
 type Result struct {
@@ -124,14 +125,18 @@ func FormatSource(path string, src []byte, opts Options) ([]byte, []readability.
 		return nil, nil, fmt.Errorf("gofumpt %s: %w", path, err)
 	}
 
-	formatted, issues, err := readability.Rewrite(path, formatted)
-	if err != nil {
-		return nil, nil, err
-	}
+	var issues []readability.Issue
 
-	formatted, err = gofumpt.Source(formatted, gofumpt.Options{})
-	if err != nil {
-		return nil, nil, fmt.Errorf("gofumpt after readability %s: %w", path, err)
+	if !opts.SkipReadability {
+		formatted, issues, err = readability.Rewrite(path, formatted)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		formatted, err = gofumpt.Source(formatted, gofumpt.Options{})
+		if err != nil {
+			return nil, nil, fmt.Errorf("gofumpt after readability %s: %w", path, err)
+		}
 	}
 
 	return formatted, issues, nil

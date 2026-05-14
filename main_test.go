@@ -15,7 +15,16 @@ func TestCLIHelpMentionsInstallableCommand(t *testing.T) {
 		t.Fatalf("go run . --help error = %v\n%s", err, output)
 	}
 
-	for _, expected := range []string{"go-format", "--check", "--write", "--max-len"} {
+	for _, expected := range []string{
+		"go-format",
+		"--check",
+		"--write",
+		"--max-len",
+		"--stdin",
+		"--list",
+		"--diff",
+		"--version",
+	} {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("help output missing %q:\n%s", expected, output)
 		}
