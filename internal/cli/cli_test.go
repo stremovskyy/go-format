@@ -13,6 +13,7 @@ func TestRunVersionPrintsFormatterVersions(t *testing.T) {
 	var stderr bytes.Buffer
 
 	code := RunWithIO([]string{"--version"}, strings.NewReader(""), &stdout, &stderr)
+
 	if code != 0 {
 		t.Fatalf("RunWithIO(--version) code = %d, want 0\nstderr:\n%s", code, stderr.String())
 	}
@@ -54,6 +55,7 @@ func active(enabled bool) bool {
 		&stdout,
 		&stderr,
 	)
+
 	if code != 0 {
 		t.Fatalf("RunWithIO(--stdin) code = %d, want 0\nstderr:\n%s", code, stderr.String())
 	}
@@ -72,6 +74,7 @@ func TestRunRejectsStdinWithPathArguments(t *testing.T) {
 	var stderr bytes.Buffer
 
 	code := RunWithIO([]string{"--stdin", "."}, strings.NewReader(""), &stdout, &stderr)
+
 	if code != 2 {
 		t.Fatalf("RunWithIO(--stdin .) code = %d, want 2", code)
 	}
@@ -88,6 +91,7 @@ func TestRunRejectsStdinWithPathArguments(t *testing.T) {
 func TestRunListChangedFilesWithoutDiff(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "main.go")
+
 	if err := os.WriteFile(file, []byte(`package sample
 
 func active(enabled bool) bool {
@@ -109,6 +113,7 @@ func active(enabled bool) bool {
 		&stdout,
 		&stderr,
 	)
+
 	if code != 1 {
 		t.Fatalf("RunWithIO(--check --list) code = %d, want 1\nstderr:\n%s", code, stderr.String())
 	}

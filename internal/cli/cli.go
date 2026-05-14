@@ -124,6 +124,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	}
 
 	mode := formatrunner.Write
+
 	if *check {
 		mode = formatrunner.Check
 	}
@@ -149,6 +150,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 
 	if err != nil {
 		var checkErr formatrunner.CheckFailedError
+
 		if errors.As(err, &checkErr) {
 			fmt.Fprintf(
 				stderr,
@@ -196,6 +198,7 @@ func envDefault(name string, fallback string) string {
 
 func versionOutput() string {
 	version := Version
+
 	if info, ok := debug.ReadBuildInfo(); ok && version == "dev" {
 		if info.Main.Version != "" && info.Main.Version != "(devel)" {
 			version = info.Main.Version
@@ -212,6 +215,7 @@ func versionOutput() string {
 
 func moduleVersion(path string) string {
 	info, ok := debug.ReadBuildInfo()
+
 	if !ok {
 		return "unknown"
 	}

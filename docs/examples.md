@@ -107,6 +107,66 @@ func active(enabled bool, count int) bool {
 This is better when a function mixes guard clauses, normalization, setup,
 locking, loops, and a final return. Each section becomes easier to scan.
 
+### readability Logical Groups
+
+The readability pass also keeps related statements together. A call that returns
+an error stays next to its immediate error check, cleanup defers stay with their
+setup, and comments remain attached to the statement they explain:
+
+```go
+func build(ctx context.Context, raw string) (Result, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return Result{}, errors.New("empty")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	values, err := fetch(ctx, raw)
+	if err != nil {
+		return Result{}, err
+	}
+	// Persist only validated results.
+	result := Result{Name: raw, Values: values}
+	if len(result.Values) == 0 {
+		result.Reason = "empty"
+	}
+	return result, nil
+}
+```
+
+`go-format` turns that into:
+
+```go
+func build(ctx context.Context, raw string) (Result, error) {
+	raw = strings.TrimSpace(raw)
+
+	if raw == "" {
+		return Result{}, errors.New("empty")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	values, err := fetch(ctx, raw)
+	if err != nil {
+		return Result{}, err
+	}
+
+	// Persist only validated results.
+	result := Result{Name: raw, Values: values}
+
+	if len(result.Values) == 0 {
+		result.Reason = "empty"
+	}
+
+	return result, nil
+}
+```
+
+This is intentionally semantic rather than purely vertical: the formatter adds
+space around changes in intent without splitting the error check from the call
+that produced the error.
+
 ### Long Lines
 
 Plain `gofmt` does not wrap long composite literals just because they cross a

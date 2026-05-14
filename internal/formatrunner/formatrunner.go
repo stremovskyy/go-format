@@ -78,6 +78,7 @@ func Run(opts Options) (Result, error) {
 		}
 
 		result.ChangedFiles = append(result.ChangedFiles, file)
+
 		if opts.Mode == Write {
 			if err := os.WriteFile(file, formatted, 0o644); err != nil {
 				return result, fmt.Errorf("write %s: %w", file, err)
@@ -175,6 +176,7 @@ func runGolines(path string, src []byte, opts Options) ([]byte, error) {
 	defer os.RemoveAll(tmpDir)
 
 	tmpFile := filepath.Join(tmpDir, filepath.Base(path))
+
 	if err := os.WriteFile(tmpFile, src, 0o644); err != nil {
 		return nil, fmt.Errorf("write golines temp file: %w", err)
 	}
@@ -213,6 +215,7 @@ func unifiedDiff(path string, before []byte, after []byte) (string, error) {
 
 	beforePath := filepath.Join(tmpDir, "before.go")
 	afterPath := filepath.Join(tmpDir, "after.go")
+
 	if err := os.WriteFile(beforePath, before, 0o644); err != nil {
 		return "", fmt.Errorf("write diff before: %w", err)
 	}
@@ -225,6 +228,7 @@ func unifiedDiff(path string, before []byte, after []byte) (string, error) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		var exitErr *exec.ExitError
+
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 			return relabelDiff(string(output), beforePath, afterPath, path), nil
 		}

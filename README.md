@@ -14,9 +14,11 @@ It runs:
 - `gofumpt`
 - a logical blank-line pass for dense functions
 
-The blank-line pass separates guard clauses, normalization/setup blocks,
-lock/defer groups, loops/switches, and final returns. It does not insert blank
-lines between every statement.
+The blank-line pass separates guard clauses, validation and normalization,
+setup/defer cleanup blocks, decision branches, lock groups, loops/switches, and
+final returns. It keeps coupled `value, err := call()` / `if err != nil` pairs
+together and keeps leading comments attached to the statement they describe.
+It does not insert blank lines between every statement.
 
 ## Installation
 

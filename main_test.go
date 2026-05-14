@@ -34,6 +34,7 @@ func TestCLIHelpMentionsInstallableCommand(t *testing.T) {
 func TestCLIFormatsFixture(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "main.go")
+
 	if err := os.WriteFile(file, []byte(`package sample
 
 func active(enabled bool) bool {

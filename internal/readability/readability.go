@@ -31,16 +31,17 @@ func Rewrite(path string, src []byte) ([]byte, []Issue, error) {
 	}
 
 	lines := splitLines(src)
+	comments := commentSpans(fset, file)
 	insertions := map[int]string{}
 
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch current := node.(type) {
 		case *ast.BlockStmt:
-			checkStmtList(fset, lines, current.List, insertions)
+			checkStmtList(fset, lines, comments, current.List, insertions)
 		case *ast.CaseClause:
-			checkStmtList(fset, lines, current.Body, insertions)
+			checkStmtList(fset, lines, comments, current.Body, insertions)
 		case *ast.CommClause:
-			checkStmtList(fset, lines, current.Body, insertions)
+			checkStmtList(fset, lines, comments, current.Body, insertions)
 		}
 
 		return true
@@ -157,6 +158,7 @@ func normalizeRecursivePath(path string) string {
 
 	if strings.HasSuffix(path, string(filepath.Separator)+"...") {
 		base := strings.TrimSuffix(path, string(filepath.Separator)+"...")
+
 		if base == "" {
 			return string(filepath.Separator)
 		}
@@ -166,6 +168,7 @@ func normalizeRecursivePath(path string) string {
 
 	if strings.HasSuffix(path, "/...") {
 		base := strings.TrimSuffix(path, "/...")
+
 		if base == "" {
 			return "."
 		}
@@ -204,6 +207,7 @@ func skipDir(name string, includeHidden bool) bool {
 func splitLines(src []byte) []string {
 	text := strings.ReplaceAll(string(src), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
+
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
@@ -211,19 +215,62 @@ func splitLines(src []byte) []string {
 	return lines
 }
 
-func checkStmtList(fset *token.FileSet, lines []string, stmts []ast.Stmt, insertions map[int]string) {
+type commentSpan struct {
+	start int
+	end   int
+}
+
+func commentSpans(fset *token.FileSet, file *ast.File) []commentSpan {
+	comments := make([]commentSpan, 0, len(file.Comments))
+
+	for _, group := range file.Comments {
+		comments = append(comments, commentSpan{
+			start: fset.Position(group.Pos()).Line,
+			end:   fset.Position(group.End()).Line,
+		})
+	}
+
+	sort.Slice(comments, func(i, j int) bool {
+		if comments[i].start != comments[j].start {
+			return comments[i].start < comments[j].start
+		}
+
+		return comments[i].end < comments[j].end
+	})
+
+	return comments
+}
+
+func checkStmtList(
+	fset *token.FileSet,
+	lines []string,
+	comments []commentSpan,
+	stmts []ast.Stmt,
+	insertions map[int]string,
+) {
 	for idx := 1; idx < len(stmts); idx++ {
 		prev := stmts[idx-1]
 		curr := stmts[idx]
 
-		if needsBlankBefore(prev, curr, idx == len(stmts)-1) && !hasBlankBetween(fset, lines, prev, curr) {
-			line := fset.Position(curr.Pos()).Line
+		if needsBlankBefore(prev, curr, idx == len(stmts)-1) {
+			prevEnd := fset.Position(prev.End()).Line
+			currStart := fset.Position(curr.Pos()).Line
+			line := insertionLine(prevEnd, currStart, comments)
+
+			if hasBlankBetweenLines(lines, prevEnd, line) {
+				continue
+			}
+
 			insertions[line] = "missing blank line before logical block"
 		}
 	}
 }
 
 func needsBlankBefore(prev ast.Stmt, curr ast.Stmt, isLast bool) bool {
+	if isCoupledErrorCheck(prev, curr) {
+		return false
+	}
+
 	if isStandaloneControl(prev) {
 		return true
 	}
@@ -236,7 +283,15 @@ func needsBlankBefore(prev ast.Stmt, curr ast.Stmt, isLast bool) bool {
 		return true
 	}
 
+	if isDefer(prev) && !isDefer(curr) {
+		return true
+	}
+
 	if isLoopOrSwitch(curr) && !isLoopOrSwitch(prev) {
+		return true
+	}
+
+	if isDecision(curr) && !isDecision(prev) {
 		return true
 	}
 
@@ -258,18 +313,31 @@ func isStandaloneControl(stmt ast.Stmt) bool {
 	}
 }
 
+func isDecision(stmt ast.Stmt) bool {
+	current, ok := stmt.(*ast.IfStmt)
+
+	if !ok {
+		return false
+	}
+
+	return current.Else == nil
+}
+
 func startsLockGroup(stmt ast.Stmt) bool {
 	expr, ok := stmt.(*ast.ExprStmt)
+
 	if !ok {
 		return false
 	}
 
 	call, ok := expr.X.(*ast.CallExpr)
+
 	if !ok {
 		return false
 	}
 
 	selector, ok := call.Fun.(*ast.SelectorExpr)
+
 	if !ok {
 		return false
 	}
@@ -279,16 +347,24 @@ func startsLockGroup(stmt ast.Stmt) bool {
 
 func isUnlockDefer(stmt ast.Stmt) bool {
 	deferStmt, ok := stmt.(*ast.DeferStmt)
+
 	if !ok {
 		return false
 	}
 
 	selector, ok := deferStmt.Call.Fun.(*ast.SelectorExpr)
+
 	if !ok {
 		return false
 	}
 
 	return selector.Sel.Name == "Unlock" || selector.Sel.Name == "RUnlock"
+}
+
+func isDefer(stmt ast.Stmt) bool {
+	_, ok := stmt.(*ast.DeferStmt)
+
+	return ok
 }
 
 func isLoopOrSwitch(stmt ast.Stmt) bool {
@@ -306,10 +382,125 @@ func isReturn(stmt ast.Stmt) bool {
 	return ok
 }
 
-func hasBlankBetween(fset *token.FileSet, lines []string, prev ast.Stmt, curr ast.Stmt) bool {
-	prevEnd := fset.Position(prev.End()).Line
-	currStart := fset.Position(curr.Pos()).Line
+func isCoupledErrorCheck(prev ast.Stmt, curr ast.Stmt) bool {
+	name, ok := errorCheckName(curr)
 
+	if !ok {
+		return false
+	}
+
+	return stmtAssignsName(prev, name)
+}
+
+func errorCheckName(stmt ast.Stmt) (string, bool) {
+	current, ok := stmt.(*ast.IfStmt)
+
+	if !ok || current.Else != nil {
+		return "", false
+	}
+
+	condition, ok := current.Cond.(*ast.BinaryExpr)
+
+	if !ok || (condition.Op != token.EQL && condition.Op != token.NEQ) {
+		return "", false
+	}
+
+	if name, ok := identNilPair(condition.X, condition.Y); ok {
+		return name, true
+	}
+
+	return identNilPair(condition.Y, condition.X)
+}
+
+func identNilPair(candidate ast.Expr, nilCandidate ast.Expr) (string, bool) {
+	ident, ok := candidate.(*ast.Ident)
+
+	if !ok || ident.Name == "_" {
+		return "", false
+	}
+
+	nilIdent, ok := nilCandidate.(*ast.Ident)
+
+	if !ok || nilIdent.Name != "nil" {
+		return "", false
+	}
+
+	return ident.Name, true
+}
+
+func stmtAssignsName(stmt ast.Stmt, name string) bool {
+	switch current := stmt.(type) {
+	case *ast.AssignStmt:
+		for _, expr := range current.Lhs {
+			if exprName(expr) == name {
+				return true
+			}
+		}
+	case *ast.DeclStmt:
+		decl, ok := current.Decl.(*ast.GenDecl)
+
+		if !ok {
+			return false
+		}
+
+		for _, spec := range decl.Specs {
+			values, ok := spec.(*ast.ValueSpec)
+
+			if !ok {
+				continue
+			}
+
+			for _, ident := range values.Names {
+				if ident.Name == name {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func exprName(expr ast.Expr) string {
+	switch current := expr.(type) {
+	case *ast.Ident:
+		return current.Name
+	case *ast.ParenExpr:
+		return exprName(current.X)
+	default:
+		return ""
+	}
+}
+
+func insertionLine(prevEnd int, currStart int, comments []commentSpan) int {
+	line := currStart
+
+	for {
+		start, ok := directlyAttachedCommentStart(prevEnd, line, comments)
+
+		if !ok {
+			return line
+		}
+
+		line = start
+	}
+}
+
+func directlyAttachedCommentStart(prevEnd int, line int, comments []commentSpan) (int, bool) {
+	for idx := len(comments) - 1; idx >= 0; idx-- {
+		comment := comments[idx]
+
+		if comment.end != line-1 || comment.start <= prevEnd {
+			continue
+		}
+
+		return comment.start, true
+	}
+
+	return 0, false
+}
+
+func hasBlankBetweenLines(lines []string, prevEnd int, currStart int) bool {
 	for line := prevEnd + 1; line < currStart; line++ {
 		if line > 0 && line <= len(lines) && strings.TrimSpace(lines[line-1]) == "" {
 			return true
@@ -326,6 +517,7 @@ func applyInsertions(src []byte, insertions map[int]string) []byte {
 
 	for idx, line := range lines {
 		lineNo := idx + 1
+
 		if _, ok := insertions[lineNo]; ok && len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
 			out = append(out, "")
 		}
@@ -334,6 +526,7 @@ func applyInsertions(src []byte, insertions map[int]string) []byte {
 	}
 
 	result := strings.Join(out, "\n")
+
 	if endsWithNewline {
 		result += "\n"
 	}

@@ -174,6 +174,7 @@ func active(enabled bool) bool {
 			t.Fatalf("restore cwd: %v", err)
 		}
 	})
+
 	if err := os.Chdir(root); err != nil {
 		t.Fatalf("chdir %s: %v", root, err)
 	}
