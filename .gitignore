@@ -1,0 +1,6 @@
+.DS_Store
+/go-format
+/dist/
+/tmp/
+*.test
+coverage.out
