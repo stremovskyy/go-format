@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 
 	"github.com/stremovskyy/go-format/internal/formatrunner"
 )
@@ -52,6 +53,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	skipGolines := fs.Bool("skip-golines", false, "skip golines wrapping")
 	skipReadability := fs.Bool("skip-readability", false, "skip logical blank-line formatting")
 	includeHidden := fs.Bool("include-hidden", false, "include hidden directories other than .git")
+	progress := fs.Bool("progress", true, "print file progress to stderr")
 	stdinMode := fs.Bool("stdin", false, "format Go source from stdin and write to stdout")
 	stdinPath := fs.String("stdin-path", "stdin.go", "display path used for stdin parsing and diagnostics")
 	version := fs.Bool("version", false, "print formatter versions")
@@ -129,6 +131,15 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		mode = formatrunner.Check
 	}
 
+	var progressFunc func(formatrunner.ProgressEvent)
+	var reporter *progressReporter
+
+	if *progress {
+		reporter = newProgressReporter(stderr)
+		progressFunc = reporter.update
+		defer reporter.close()
+	}
+
 	result, err := formatrunner.Run(formatrunner.Options{
 		Mode:            mode,
 		Paths:           fs.Args(),
@@ -138,6 +149,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		SkipReadability: *skipReadability,
 		IncludeHidden:   *includeHidden,
 		DiffMaxBytes:    8 << 20,
+		Progress:        progressFunc,
 	})
 
 	if *printDiff && len(result.Diff) > 0 {
@@ -180,6 +192,71 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	)
 
 	return 0
+}
+
+type progressReporter struct {
+	writer  io.Writer
+	lastLen int
+}
+
+func newProgressReporter(writer io.Writer) *progressReporter {
+	return &progressReporter{writer: writer}
+}
+
+func (reporter *progressReporter) update(event formatrunner.ProgressEvent) {
+	if reporter == nil || reporter.writer == nil || event.Total == 0 {
+		return
+	}
+
+	completed := event.Current - 1
+	label := event.File
+
+	if event.Done {
+		completed = event.Current
+		label = "done"
+	}
+
+	line := fmt.Sprintf(
+		"go-format: [%s] %d/%d %s",
+		progressBar(completed, event.Total, 24),
+		event.Current,
+		event.Total,
+		label,
+	)
+
+	padding := ""
+
+	if reporter.lastLen > len(line) {
+		padding = strings.Repeat(" ", reporter.lastLen-len(line))
+	}
+
+	fmt.Fprintf(reporter.writer, "\r%s%s", line, padding)
+	reporter.lastLen = len(line)
+
+	if event.Done {
+		fmt.Fprintln(reporter.writer)
+		reporter.lastLen = 0
+	}
+}
+
+func (reporter *progressReporter) close() {
+	if reporter == nil || reporter.writer == nil || reporter.lastLen == 0 {
+		return
+	}
+
+	fmt.Fprintln(reporter.writer)
+	reporter.lastLen = 0
+}
+
+func progressBar(completed int, total int, width int) string {
+	if total <= 0 || width <= 0 {
+		return ""
+	}
+
+	completed = min(max(completed, 0), total)
+	filled := completed * width / total
+
+	return strings.Repeat("=", filled) + strings.Repeat("-", width-filled)
 }
 
 func printFiles(stdout io.Writer, files []string) {

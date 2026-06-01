@@ -70,6 +70,12 @@ List files that would change without printing diffs:
 go-format --check --list --diff=false ./...
 ```
 
+Disable progress output for quiet scripts:
+
+```sh
+go-format --check --progress=false ./...
+```
+
 Print the bundled formatter versions:
 
 ```sh
@@ -92,6 +98,8 @@ More examples and before/after comparisons are in [docs/examples.md](docs/exampl
 `--check` prints unified diffs and exits with status `1` when files need
 formatting. Use `--diff=false` to suppress diffs and `--list` to print changed
 file paths. `--write` rewrites files in place and can also use `--list`.
+Path-based runs print file progress to standard error; use `--progress=false`
+to keep script logs quiet.
 
 `--stdin` formats source from standard input and writes the formatted source to
 standard output. It accepts `--stdin-path` so parse errors and formatter

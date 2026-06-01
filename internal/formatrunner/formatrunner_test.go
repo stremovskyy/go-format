@@ -195,6 +195,63 @@ func active(enabled bool) bool {
 	}
 }
 
+func TestRunReportsProgressForEachFile(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "a.go")
+	second := filepath.Join(root, "b.go")
+
+	mustWrite(t, first, `package sample
+
+func first() string {
+	return "first"
+}
+`)
+	mustWrite(t, second, `package sample
+
+func second() string {
+	return "second"
+}
+`)
+
+	var events []ProgressEvent
+
+	result, err := Run(Options{
+		Mode:         Check,
+		Paths:        []string{root},
+		GoToolchain:  "local",
+		SkipGoLines:  true,
+		DiffMaxBytes: 1 << 20,
+		Progress: func(event ProgressEvent) {
+			events = append(events, event)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run(Check) error = %v", err)
+	}
+
+	if len(result.CheckedFiles) != 2 {
+		t.Fatalf("CheckedFiles = %#v, want two files", result.CheckedFiles)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("progress events = %#v, want two file events and a done event", events)
+	}
+
+	expectedFiles := []string{first, second}
+
+	for i, expectedFile := range expectedFiles {
+		if events[i].Current != i+1 || events[i].Total != 2 || events[i].File != expectedFile || events[i].Done {
+			t.Fatalf("progress event %d = %#v, want current file %q", i, events[i], expectedFile)
+		}
+	}
+
+	done := events[len(events)-1]
+
+	if done.Current != 2 || done.Total != 2 || done.File != "" || !done.Done {
+		t.Fatalf("done progress event = %#v, want completed progress", done)
+	}
+}
+
 func TestFormatSourceCanSkipReadabilityPass(t *testing.T) {
 	input := []byte(`package sample
 

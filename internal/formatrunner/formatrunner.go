@@ -33,6 +33,14 @@ type Options struct {
 	SkipReadability bool
 	DiffMaxBytes    int
 	IncludeHidden   bool
+	Progress        func(ProgressEvent)
+}
+
+type ProgressEvent struct {
+	Current int
+	Total   int
+	File    string
+	Done    bool
 }
 
 type Result struct {
@@ -60,7 +68,13 @@ func Run(opts Options) (Result, error) {
 
 	result := Result{CheckedFiles: files}
 
-	for _, file := range files {
+	for idx, file := range files {
+		reportProgress(opts.Progress, ProgressEvent{
+			Current: idx + 1,
+			Total:   len(files),
+			File:    file,
+		})
+
 		original, err := os.ReadFile(file)
 		if err != nil {
 			return result, fmt.Errorf("read %s: %w", file, err)
@@ -95,6 +109,12 @@ func Run(opts Options) (Result, error) {
 		result.Diff += diff
 	}
 
+	reportProgress(opts.Progress, ProgressEvent{
+		Current: len(files),
+		Total:   len(files),
+		Done:    true,
+	})
+
 	sort.Strings(result.ChangedFiles)
 
 	if opts.Mode == Check && len(result.ChangedFiles) > 0 {
@@ -106,6 +126,14 @@ func Run(opts Options) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func reportProgress(progress func(ProgressEvent), event ProgressEvent) {
+	if progress == nil || event.Total == 0 {
+		return
+	}
+
+	progress(event)
 }
 
 func FormatSource(path string, src []byte, opts Options) ([]byte, []readability.Issue, error) {
