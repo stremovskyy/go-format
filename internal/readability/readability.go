@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -89,7 +90,7 @@ func RewriteFile(path string) ([]Issue, error) {
 	return issues, nil
 }
 
-func CollectFiles(paths []string, includeHidden bool) ([]string, error) {
+func CollectFiles(paths []string, includeHidden bool, exclude []string) ([]string, error) {
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
@@ -120,12 +121,16 @@ func CollectFiles(paths []string, includeHidden bool) ([]string, error) {
 		}
 
 		if !info.IsDir() {
-			if strings.HasSuffix(path, ".go") && !isGeneratedPath(path) {
+			base := filepath.Dir(path)
+
+			if strings.HasSuffix(path, ".go") && !isGeneratedPath(path) && !isExcludedPath(base, path, exclude) {
 				addFile(path)
 			}
 
 			continue
 		}
+
+		root := path
 
 		err = filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -134,6 +139,14 @@ func CollectFiles(paths []string, includeHidden bool) ([]string, error) {
 
 			if current != path && entry.IsDir() && skipDir(entry.Name(), includeHidden) {
 				return filepath.SkipDir
+			}
+
+			if current != path && isExcludedPath(root, current, exclude) {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+
+				return nil
 			}
 
 			if !entry.IsDir() && strings.HasSuffix(current, ".go") && !isGeneratedPath(current) {
@@ -150,6 +163,55 @@ func CollectFiles(paths []string, includeHidden bool) ([]string, error) {
 	sort.Strings(files)
 
 	return files, nil
+}
+
+func isExcludedPath(root string, candidate string, exclude []string) bool {
+	if len(exclude) == 0 {
+		return false
+	}
+
+	rel, err := filepath.Rel(root, candidate)
+
+	if err != nil || rel == "." {
+		rel = candidate
+	}
+
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	base := filepath.Base(candidate)
+
+	for _, pattern := range exclude {
+		pattern = filepath.ToSlash(filepath.Clean(strings.TrimSpace(pattern)))
+
+		if pattern == "" || pattern == "." {
+			continue
+		}
+
+		if matchExcludePattern(pattern, rel, base) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func matchExcludePattern(pattern string, rel string, base string) bool {
+	if strings.HasSuffix(pattern, "/**") {
+		prefix := strings.TrimSuffix(pattern, "/**")
+
+		return rel == prefix || strings.HasPrefix(rel, prefix+"/")
+	}
+
+	if matched, _ := path.Match(pattern, rel); matched {
+		return true
+	}
+
+	if !strings.Contains(pattern, "/") {
+		if matched, _ := path.Match(pattern, base); matched {
+			return true
+		}
+	}
+
+	return false
 }
 
 func normalizeRecursivePath(path string) string {

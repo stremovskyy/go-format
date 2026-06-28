@@ -209,7 +209,7 @@ func TestCollectFilesDeduplicatesOverlappingPaths(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	files, err := CollectFiles([]string{root, filepath.Join(root, "..."), file}, false)
+	files, err := CollectFiles([]string{root, filepath.Join(root, "..."), file}, false, nil)
 	if err != nil {
 		t.Fatalf("CollectFiles error = %v", err)
 	}

@@ -24,6 +24,10 @@ func TestCLIHelpMentionsInstallableCommand(t *testing.T) {
 		"--list",
 		"--diff",
 		"--jobs",
+		"--config",
+		"--no-config",
+		"--init",
+		"--print-config",
 		"--version",
 	} {
 		if !strings.Contains(string(output), expected) {

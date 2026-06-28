@@ -184,6 +184,271 @@ func active() bool {
 	}
 }
 
+func TestRunLoadsConfigFromCurrentDirectory(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+
+	if err := os.WriteFile(filepath.Join(root, ".go-format.yml"), []byte("skip_readability: true\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := os.WriteFile(file, []byte(`package sample
+
+func active(enabled bool) bool {
+	if !enabled {
+		return false
+	}
+	return true
+}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir %s: %v", root, err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--check", "--skip-golines", "--progress=false", "."},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 0 {
+		t.Fatalf(
+			"RunWithIO with config code = %d, want 0\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestRunCLIFlagsOverrideConfig(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(root, ".go-format.yml"), []byte("skip_readability: true\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(`package sample
+
+func active(enabled bool) bool {
+	if !enabled {
+		return false
+	}
+	return true
+}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir %s: %v", root, err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--check", "--skip-golines", "--skip-readability=false", "--progress=false", "."},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 1 {
+		t.Fatalf(
+			"RunWithIO override code = %d, want check failure\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestRunCanIgnoreDiscoveredConfig(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(root, ".go-format.yml"), []byte("skip_readability: true\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(`package sample
+
+func active(enabled bool) bool {
+	if !enabled {
+		return false
+	}
+	return true
+}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir %s: %v", root, err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--check", "--skip-golines", "--no-config", "--progress=false", "."},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 1 {
+		t.Fatalf(
+			"RunWithIO --no-config code = %d, want check failure\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestRunPrintsEffectiveConfig(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(root, ".go-format.yml"), []byte(`max_len: 100
+skip_readability: true
+exclude:
+  - ignored/**
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir %s: %v", root, err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--print-config", "--skip-golines"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 0 {
+		t.Fatalf("RunWithIO --print-config code = %d, want 0\nstderr:\n%s", code, stderr.String())
+	}
+
+	for _, expected := range []string{
+		"max_len: 100",
+		"skip_golines: true",
+		"skip_readability: true",
+		"exclude:",
+		"  - ignored/**",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("print config output missing %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+func TestRunInitWritesDefaultConfig(t *testing.T) {
+	root := t.TempDir()
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir %s: %v", root, err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO([]string{"--init"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("RunWithIO --init code = %d, want 0\nstderr:\n%s", code, stderr.String())
+	}
+
+	body, err := os.ReadFile(filepath.Join(root, ".go-format.yml"))
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+
+	for _, expected := range []string{
+		"max_len: 120",
+		"skip_golines: false",
+		"skip_readability: false",
+		"include_hidden: false",
+		"go_toolchain: local",
+		"exclude: []",
+	} {
+		if !strings.Contains(string(body), expected) {
+			t.Fatalf("generated config missing %q:\n%s", expected, body)
+		}
+	}
+
+	if !strings.Contains(stdout.String(), "created .go-format.yml") {
+		t.Fatalf("stdout missing init message:\n%s", stdout.String())
+	}
+}
+
 func TestProgressReporterWritesProgressBarUpdates(t *testing.T) {
 	var stderr bytes.Buffer
 

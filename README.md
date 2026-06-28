@@ -70,6 +70,18 @@ Format editor input from stdin:
 go-format --stdin --stdin-path internal/cli/cli.go < internal/cli/cli.go
 ```
 
+Create a project config:
+
+```sh
+go-format --init
+```
+
+Print the effective config after discovery and CLI overrides:
+
+```sh
+go-format --print-config
+```
+
 List files that would change without printing diffs:
 
 ```sh
@@ -117,6 +129,55 @@ The first run may download and build the pinned `golines` module into the local
 Go module and user cache. Later runs reuse the cached `golines` binary. Use
 `--skip-golines` for environments that must avoid that subprocess. Use
 `--skip-readability` to disable only the logical blank-line pass.
+
+## Configuration
+
+`go-format` discovers `.go-format.yml` from the current directory upward. CLI
+flags override discovered config values, and `--no-config` disables discovery
+for one run.
+
+```yaml
+max_len: 120
+skip_golines: false
+skip_readability: false
+include_hidden: false
+go_toolchain: local
+exclude: []
+```
+
+Use `--config path/to/.go-format.yml` for an explicit config path. `exclude`
+accepts simple filepath-style patterns relative to each formatted root, for
+example `ignored/**` or `*.pb.go`.
+
+## CI and Editors
+
+GitHub Actions can run the formatter directly from the module:
+
+```yaml
+- name: Format check
+  run: go run github.com/stremovskyy/go-format@v0.1.0 --check ./...
+```
+
+For this repository, CI uses the checked-out command:
+
+```yaml
+- name: Format check
+  run: go run . --check --progress=false ./...
+```
+
+A minimal pre-commit hook can format staged Go changes before commit:
+
+```sh
+#!/bin/sh
+go-format --write ./...
+git add $(git ls-files '*.go')
+```
+
+Editors can format buffers through stdin without touching files directly:
+
+```sh
+go-format --stdin --stdin-path "$FILE" < "$FILE"
+```
 
 ## Release
 

@@ -1,0 +1,6 @@
+max_len: 120
+skip_golines: false
+skip_readability: false
+include_hidden: false
+go_toolchain: local
+exclude: []

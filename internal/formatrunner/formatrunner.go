@@ -37,6 +37,7 @@ type Options struct {
 	Diff            bool
 	DiffMaxBytes    int
 	IncludeHidden   bool
+	Exclude         []string
 	Progress        func(ProgressEvent)
 
 	golinesBinary   string
@@ -72,7 +73,7 @@ func Run(opts Options) (Result, error) {
 
 	opts = normalizeOptions(opts)
 
-	files, err := readability.CollectFiles(opts.Paths, opts.IncludeHidden)
+	files, err := readability.CollectFiles(opts.Paths, opts.IncludeHidden, opts.Exclude)
 	if err != nil {
 		return Result{}, err
 	}

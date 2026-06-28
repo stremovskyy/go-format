@@ -124,6 +124,39 @@ func bad( value string ) string { return value }
 	}
 }
 
+func TestRunExcludesConfiguredPatterns(t *testing.T) {
+	root := t.TempDir()
+	kept := filepath.Join(root, "main.go")
+	excluded := filepath.Join(root, "ignored", "bad.go")
+
+	mustWrite(t, kept, `package sample
+
+func active() bool {
+	return true
+}
+`)
+	mustWrite(t, excluded, `package ignored
+
+func bad( value string ) string { return value }
+`)
+
+	result, err := Run(Options{
+		Mode:         Check,
+		Paths:        []string{root},
+		GoToolchain:  "local",
+		SkipGoLines:  true,
+		DiffMaxBytes: 1 << 20,
+		Exclude:      []string{"ignored/**"},
+	})
+	if err != nil {
+		t.Fatalf("Run(Check) error = %v", err)
+	}
+
+	if !reflect.DeepEqual(result.CheckedFiles, []string{kept}) {
+		t.Fatalf("CheckedFiles = %#v, want only %#v", result.CheckedFiles, []string{kept})
+	}
+}
+
 func TestRunAcceptsGoStyleRecursivePath(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "pkg", "main.go")

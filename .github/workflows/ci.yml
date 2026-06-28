@@ -24,7 +24,7 @@ jobs:
           cache: true
 
       - name: Format check
-        run: test -z "$(gofmt -l .)"
+        run: go run . --check --progress=false ./...
 
       - name: Test
         run: go test ./...

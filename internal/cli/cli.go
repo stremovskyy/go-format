@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	appconfig "github.com/stremovskyy/go-format/internal/config"
 	"github.com/stremovskyy/go-format/internal/formatrunner"
 )
 
@@ -17,9 +18,11 @@ var Version = "dev"
 const Usage = `go-format formats Go source using gofmt, golines, gofumpt, and logical blank-line rules.
 
 Usage:
-  go-format --write [--list] [--jobs N] [--max-len N] [path ...]
-  go-format --check [--list] [--diff=false] [--jobs N] [--max-len N] [path ...]
-  go-format --stdin [--stdin-path file.go]
+  go-format --write [--config path] [--no-config] [--list] [--jobs N] [--max-len N] [path ...]
+  go-format --check [--config path] [--no-config] [--list] [--diff=false] [--jobs N] [--max-len N] [path ...]
+  go-format --stdin [--config path] [--no-config] [--stdin-path file.go]
+  go-format --init [--config path]
+  go-format --print-config [--config path]
   go-format --version
 
 Install:
@@ -44,11 +47,13 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	write := fs.Bool("write", false, "write formatted files")
 	printDiff := fs.Bool("diff", true, "print unified diffs in check mode")
 	list := fs.Bool("list", false, "print changed file paths")
-	maxLen := fs.Int("max-len", 120, "target maximum line length for golines")
+	defaults := appconfig.Defaults()
+	defaults.GoToolchain = envDefault("GO_TOOLCHAIN", defaults.GoToolchain)
+	maxLen := fs.Int("max-len", defaults.MaxLen, "target maximum line length for golines")
 	jobs := fs.Int("jobs", 0, "number of files to format concurrently; 0 uses GOMAXPROCS")
 	goToolchain := fs.String(
 		"go-toolchain",
-		envDefault("GO_TOOLCHAIN", "local"),
+		defaults.GoToolchain,
 		"GOTOOLCHAIN policy used when invoking Go-based formatters",
 	)
 	skipGolines := fs.Bool("skip-golines", false, "skip golines wrapping")
@@ -57,6 +62,10 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	progress := fs.Bool("progress", true, "print file progress to stderr")
 	stdinMode := fs.Bool("stdin", false, "format Go source from stdin and write to stdout")
 	stdinPath := fs.String("stdin-path", "stdin.go", "display path used for stdin parsing and diagnostics")
+	configPath := fs.String("config", "", "path to .go-format.yml")
+	noConfig := fs.Bool("no-config", false, "disable .go-format.yml discovery")
+	initConfig := fs.Bool("init", false, "create a default .go-format.yml and exit")
+	printConfig := fs.Bool("print-config", false, "print the effective configuration and exit")
 	version := fs.Bool("version", false, "print formatter versions")
 
 	if err := fs.Parse(args); err != nil {
@@ -66,6 +75,8 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 
 		return 2
 	}
+
+	setFlags := visitedFlags(fs)
 
 	if *jobs < 0 {
 		fmt.Fprintln(stderr, "--jobs must be non-negative")
@@ -79,10 +90,69 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		return 0
 	}
 
+	if *configPath != "" && *noConfig {
+		fmt.Fprintln(stderr, "--config and --no-config are mutually exclusive")
+
+		return 2
+	}
+
 	if *check && *write {
 		fmt.Fprintln(stderr, "--check and --write are mutually exclusive")
 
 		return 2
+	}
+
+	initTarget := *configPath
+
+	if initTarget == "" {
+		initTarget = appconfig.DefaultFileName
+	}
+
+	if *initConfig {
+		if len(fs.Args()) > 0 {
+			fmt.Fprintln(stderr, "--init does not accept path arguments")
+
+			return 2
+		}
+
+		cfg := defaults
+		applyConfigOverrides(&cfg, setFlags, *maxLen, *goToolchain, *skipGolines, *skipReadability, *includeHidden)
+
+		if err := appconfig.WriteFile(initTarget, cfg); err != nil {
+			fmt.Fprintf(stderr, "go-format: %v\n", err)
+
+			return 1
+		}
+
+		fmt.Fprintf(stdout, "go-format: created %s\n", initTarget)
+
+		return 0
+	}
+
+	cfg, err := loadConfig(*configPath, *noConfig, defaults)
+	if err != nil {
+		fmt.Fprintf(stderr, "go-format: %v\n", err)
+
+		return 1
+	}
+
+	applyConfigOverrides(&cfg, setFlags, *maxLen, *goToolchain, *skipGolines, *skipReadability, *includeHidden)
+
+	if *printConfig {
+		body, err := appconfig.Marshal(cfg)
+		if err != nil {
+			fmt.Fprintf(stderr, "go-format: marshal config: %v\n", err)
+
+			return 1
+		}
+
+		if _, err := stdout.Write(body); err != nil {
+			fmt.Fprintf(stderr, "go-format: write stdout: %v\n", err)
+
+			return 1
+		}
+
+		return 0
 	}
 
 	if *stdinMode {
@@ -112,10 +182,10 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		}
 
 		formatted, _, err := formatrunner.FormatSource(*stdinPath, src, formatrunner.Options{
-			MaxLen:          *maxLen,
-			GoToolchain:     *goToolchain,
-			SkipGoLines:     *skipGolines,
-			SkipReadability: *skipReadability,
+			MaxLen:          cfg.MaxLen,
+			GoToolchain:     cfg.GoToolchain,
+			SkipGoLines:     cfg.SkipGoLines,
+			SkipReadability: cfg.SkipReadability,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "go-format: %v\n", err)
@@ -150,12 +220,13 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	result, err := formatrunner.Run(formatrunner.Options{
 		Mode:            mode,
 		Paths:           fs.Args(),
-		MaxLen:          *maxLen,
-		GoToolchain:     *goToolchain,
+		MaxLen:          cfg.MaxLen,
+		GoToolchain:     cfg.GoToolchain,
 		Jobs:            *jobs,
-		SkipGoLines:     *skipGolines,
-		SkipReadability: *skipReadability,
-		IncludeHidden:   *includeHidden,
+		SkipGoLines:     cfg.SkipGoLines,
+		SkipReadability: cfg.SkipReadability,
+		IncludeHidden:   cfg.IncludeHidden,
+		Exclude:         cfg.Exclude,
 		Diff:            *printDiff,
 		DiffMaxBytes:    8 << 20,
 		Progress:        progressFunc,
@@ -271,6 +342,71 @@ func progressBar(completed int, total int, width int) string {
 func printFiles(stdout io.Writer, files []string) {
 	for _, file := range files {
 		fmt.Fprintln(stdout, file)
+	}
+}
+
+func visitedFlags(fs *flag.FlagSet) map[string]bool {
+	flags := map[string]bool{}
+	fs.Visit(func(flag *flag.Flag) {
+		flags[flag.Name] = true
+	})
+
+	return flags
+}
+
+func loadConfig(path string, noConfig bool, defaults appconfig.Config) (appconfig.Config, error) {
+	if noConfig {
+		return defaults, nil
+	}
+
+	if path != "" {
+		return appconfig.LoadFile(path, defaults)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return appconfig.Config{}, fmt.Errorf("find current directory: %w", err)
+	}
+
+	discovered, ok, err := appconfig.Discover(cwd)
+	if err != nil {
+		return appconfig.Config{}, err
+	}
+
+	if !ok {
+		return defaults, nil
+	}
+
+	return appconfig.LoadFile(discovered, defaults)
+}
+
+func applyConfigOverrides(
+	cfg *appconfig.Config,
+	setFlags map[string]bool,
+	maxLen int,
+	goToolchain string,
+	skipGolines bool,
+	skipReadability bool,
+	includeHidden bool,
+) {
+	if setFlags["max-len"] {
+		cfg.MaxLen = maxLen
+	}
+
+	if setFlags["go-toolchain"] {
+		cfg.GoToolchain = goToolchain
+	}
+
+	if setFlags["skip-golines"] {
+		cfg.SkipGoLines = skipGolines
+	}
+
+	if setFlags["skip-readability"] {
+		cfg.SkipReadability = skipReadability
+	}
+
+	if setFlags["include-hidden"] {
+		cfg.IncludeHidden = includeHidden
 	}
 }
 

@@ -45,6 +45,13 @@ Run without the logical blank-line pass:
 go-format --write --skip-readability ./...
 ```
 
+Create and inspect project defaults:
+
+```sh
+go-format --init
+go-format --print-config
+```
+
 Show the formatter versions used by the binary:
 
 ```sh
@@ -226,3 +233,69 @@ line wrapping. This keeps blank-line decisions closer to plain `gofmt`.
 Use plain `gofmt` when a project intentionally avoids opinionated wrapping or
 vertical-spacing rules. `go-format` is best when a team wants that opinion
 captured in one repeatable command.
+
+## Repository Adoption
+
+### Config
+
+Commit `.go-format.yml` at the repository root when CI, editor integrations, and
+local scripts should share the same defaults:
+
+```yaml
+max_len: 120
+skip_golines: false
+skip_readability: false
+include_hidden: false
+go_toolchain: local
+exclude:
+  - ignored/**
+  - '*.pb.go'
+```
+
+CLI flags override config values. For example, this uses the repository config
+but disables the readability pass for one run:
+
+```sh
+go-format --check --skip-readability ./...
+```
+
+Use `--no-config` when validating behavior with only built-in defaults:
+
+```sh
+go-format --check --no-config ./...
+```
+
+### GitHub Actions
+
+For a project consuming a tagged release:
+
+```yaml
+- name: Format check
+  run: go run github.com/stremovskyy/go-format@v0.1.0 --check ./...
+```
+
+For this repository, use the checked-out command:
+
+```yaml
+- name: Format check
+  run: go run . --check --progress=false ./...
+```
+
+### Pre-Commit
+
+```sh
+#!/bin/sh
+set -eu
+
+go-format --write ./...
+git add $(git ls-files '*.go')
+```
+
+### Editors
+
+Use stdin mode for editor format-on-save integrations so the editor owns the
+buffer write:
+
+```sh
+go-format --stdin --stdin-path "$FILE" < "$FILE"
+```
