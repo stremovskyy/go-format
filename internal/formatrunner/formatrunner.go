@@ -2,15 +2,17 @@ package formatrunner
 
 import (
 	"bytes"
-	"errors"
+	"context"
 	"fmt"
 	goformat "go/format"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
-	"strings"
+	"sync"
 
+	"github.com/pmezard/go-difflib/difflib"
 	"github.com/stremovskyy/go-format/internal/readability"
 	gofumpt "mvdan.cc/gofumpt/format"
 )
@@ -31,9 +33,14 @@ type Options struct {
 	GoToolchain     string
 	SkipGoLines     bool
 	SkipReadability bool
+	Jobs            int
+	Diff            bool
 	DiffMaxBytes    int
 	IncludeHidden   bool
 	Progress        func(ProgressEvent)
+
+	golinesBinary   string
+	golinesCacheDir string
 }
 
 type ProgressEvent struct {
@@ -59,6 +66,10 @@ func (err CheckFailedError) Error() string {
 }
 
 func Run(opts Options) (Result, error) {
+	if opts.Jobs < 0 {
+		return Result{}, fmt.Errorf("jobs must be non-negative")
+	}
+
 	opts = normalizeOptions(opts)
 
 	files, err := readability.CollectFiles(opts.Paths, opts.IncludeHidden)
@@ -68,45 +79,43 @@ func Run(opts Options) (Result, error) {
 
 	result := Result{CheckedFiles: files}
 
-	for idx, file := range files {
+	if len(files) == 0 {
+		return result, nil
+	}
+
+	if !opts.SkipGoLines && opts.golinesBinary == "" {
+		golinesBinary, err := resolveGolinesBinary(opts)
+		if err != nil {
+			return result, err
+		}
+
+		opts.golinesBinary = golinesBinary
+	}
+
+	fileResults := runFileJobs(files, opts)
+
+	for idx, fileResult := range fileResults {
+		if !fileResult.processed {
+			continue
+		}
+
+		file := files[idx]
 		reportProgress(opts.Progress, ProgressEvent{
 			Current: idx + 1,
 			Total:   len(files),
 			File:    file,
 		})
 
-		original, err := os.ReadFile(file)
-		if err != nil {
-			return result, fmt.Errorf("read %s: %w", file, err)
+		if fileResult.err != nil {
+			return result, fileResult.err
 		}
 
-		formatted, issues, err := FormatSource(file, original, opts)
-		if err != nil {
-			return result, err
+		result.Issues = append(result.Issues, fileResult.issues...)
+
+		if fileResult.changed {
+			result.ChangedFiles = append(result.ChangedFiles, file)
+			result.Diff += fileResult.diff
 		}
-
-		result.Issues = append(result.Issues, issues...)
-
-		if bytes.Equal(original, formatted) {
-			continue
-		}
-
-		result.ChangedFiles = append(result.ChangedFiles, file)
-
-		if opts.Mode == Write {
-			if err := os.WriteFile(file, formatted, 0o644); err != nil {
-				return result, fmt.Errorf("write %s: %w", file, err)
-			}
-
-			continue
-		}
-
-		diff, err := unifiedDiff(file, original, formatted)
-		if err != nil {
-			return result, err
-		}
-
-		result.Diff += diff
 	}
 
 	reportProgress(opts.Progress, ProgressEvent{
@@ -128,6 +137,132 @@ func Run(opts Options) (Result, error) {
 	return result, nil
 }
 
+type fileRunResult struct {
+	index     int
+	processed bool
+	changed   bool
+	diff      string
+	issues    []readability.Issue
+	err       error
+}
+
+func runFileJobs(files []string, opts Options) []fileRunResult {
+	if opts.Jobs <= 1 || len(files) <= 1 {
+		results := make([]fileRunResult, len(files))
+
+		for idx, file := range files {
+			results[idx] = processFile(idx, file, opts)
+
+			if results[idx].err != nil {
+				break
+			}
+		}
+
+		return results
+	}
+
+	workers := min(opts.Jobs, len(files))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	jobs := make(chan int)
+	results := make(chan fileRunResult, len(files))
+
+	var wg sync.WaitGroup
+
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for idx := range jobs {
+				result := processFile(idx, files[idx], opts)
+				results <- result
+
+				if result.err != nil {
+					cancel()
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+
+		for idx := range files {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- idx:
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	fileResults := make([]fileRunResult, len(files))
+
+	for result := range results {
+		fileResults[result.index] = result
+
+		if result.err != nil {
+			cancel()
+		}
+	}
+
+	return fileResults
+}
+
+func processFile(index int, file string, opts Options) fileRunResult {
+	result := fileRunResult{index: index, processed: true}
+
+	original, err := os.ReadFile(file)
+	if err != nil {
+		result.err = fmt.Errorf("read %s: %w", file, err)
+
+		return result
+	}
+
+	formatted, issues, err := FormatSource(file, original, opts)
+	if err != nil {
+		result.err = err
+
+		return result
+	}
+
+	result.issues = issues
+
+	if bytes.Equal(original, formatted) {
+		return result
+	}
+
+	result.changed = true
+
+	if opts.Mode == Write {
+		if err := os.WriteFile(file, formatted, 0o644); err != nil {
+			result.err = fmt.Errorf("write %s: %w", file, err)
+		}
+
+		return result
+	}
+
+	if opts.Diff {
+		diff, err := unifiedDiff(file, original, formatted)
+		if err != nil {
+			result.err = err
+
+			return result
+		}
+
+		result.diff = diff
+	}
+
+	return result
+}
+
 func reportProgress(progress func(ProgressEvent), event ProgressEvent) {
 	if progress == nil || event.Total == 0 {
 		return
@@ -137,6 +272,8 @@ func reportProgress(progress func(ProgressEvent), event ProgressEvent) {
 }
 
 func FormatSource(path string, src []byte, opts Options) ([]byte, []readability.Issue, error) {
+	opts = normalizeOptions(opts)
+
 	formatted, err := goformat.Source(src)
 	if err != nil {
 		return nil, nil, fmt.Errorf("gofmt %s: %w", path, err)
@@ -192,84 +329,123 @@ func normalizeOptions(opts Options) Options {
 		opts.DiffMaxBytes = 4 << 20
 	}
 
+	if opts.Jobs == 0 {
+		opts.Jobs = runtime.GOMAXPROCS(0)
+	}
+
 	return opts
 }
 
 func runGolines(path string, src []byte, opts Options) ([]byte, error) {
-	tmpDir, err := os.MkdirTemp("", "go-format-golines-*")
-	if err != nil {
-		return nil, fmt.Errorf("create golines temp dir: %w", err)
-	}
+	golinesBinary := opts.golinesBinary
 
-	defer os.RemoveAll(tmpDir)
-
-	tmpFile := filepath.Join(tmpDir, filepath.Base(path))
-
-	if err := os.WriteFile(tmpFile, src, 0o644); err != nil {
-		return nil, fmt.Errorf("write golines temp file: %w", err)
+	if golinesBinary == "" {
+		var err error
+		golinesBinary, err = resolveGolinesBinary(opts)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	args := []string{
-		"run",
-		"github.com/segmentio/golines@" + GolinesVersion,
 		"--max-len", fmt.Sprintf("%d", opts.MaxLen),
 		"--base-formatter", "gofmt",
-		"--write-output",
-		tmpFile,
 	}
-	cmd := exec.Command("go", args...)
+	cmd := exec.Command(golinesBinary, args...)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN="+opts.GoToolchain)
+	cmd.Stdin = bytes.NewReader(src)
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("golines %s: %w\n%s", path, err, output)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("golines %s: %w\n%s", path, err, stderr.String())
 	}
 
-	formatted, err := os.ReadFile(tmpFile)
-	if err != nil {
-		return nil, fmt.Errorf("read golines temp file: %w", err)
-	}
-
-	return formatted, nil
+	return stdout.Bytes(), nil
 }
 
-func unifiedDiff(path string, before []byte, after []byte) (string, error) {
-	tmpDir, err := os.MkdirTemp("", "go-format-diff-*")
+func resolveGolinesBinary(opts Options) (string, error) {
+	if opts.golinesBinary != "" {
+		return opts.golinesBinary, nil
+	}
+
+	cacheRoot := opts.golinesCacheDir
+
+	if cacheRoot == "" {
+		userCacheDir, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("find user cache dir: %w", err)
+		}
+
+		cacheRoot = filepath.Join(userCacheDir, "go-format")
+	}
+
+	binDir := filepath.Join(cacheRoot, "golines", GolinesVersion)
+	binPath := filepath.Join(binDir, golinesBinaryName())
+
+	if isExecutable(binPath) {
+		return binPath, nil
+	}
+
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return "", fmt.Errorf("create golines cache dir: %w", err)
+	}
+
+	tmpDir, err := os.MkdirTemp(binDir, "build-*")
 	if err != nil {
-		return "", fmt.Errorf("create diff temp dir: %w", err)
+		return "", fmt.Errorf("create golines build dir: %w", err)
 	}
 
 	defer os.RemoveAll(tmpDir)
 
-	beforePath := filepath.Join(tmpDir, "before.go")
-	afterPath := filepath.Join(tmpDir, "after.go")
+	args := []string{"install", "github.com/segmentio/golines@" + GolinesVersion}
+	cmd := exec.Command("go", args...)
+	cmd.Env = append(os.Environ(), "GOBIN="+tmpDir, "GOTOOLCHAIN="+opts.GoToolchain)
 
-	if err := os.WriteFile(beforePath, before, 0o644); err != nil {
-		return "", fmt.Errorf("write diff before: %w", err)
-	}
-
-	if err := os.WriteFile(afterPath, after, 0o644); err != nil {
-		return "", fmt.Errorf("write diff after: %w", err)
-	}
-
-	cmd := exec.Command("diff", "-u", beforePath, afterPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		var exitErr *exec.ExitError
-
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return relabelDiff(string(output), beforePath, afterPath, path), nil
-		}
-
-		return "", fmt.Errorf("diff %s: %w\n%s", path, err, output)
+		return "", fmt.Errorf("install golines %s: %w\n%s", GolinesVersion, err, output)
 	}
 
-	return string(output), nil
+	tmpBin := filepath.Join(tmpDir, golinesBinaryName())
+
+	if err := os.Rename(tmpBin, binPath); err != nil {
+		if isExecutable(binPath) {
+			return binPath, nil
+		}
+
+		return "", fmt.Errorf("cache golines binary: %w", err)
+	}
+
+	return binPath, nil
 }
 
-func relabelDiff(diff string, beforePath string, afterPath string, displayPath string) string {
-	diff = strings.Replace(diff, "--- "+beforePath, "--- "+displayPath, 1)
-	diff = strings.Replace(diff, "+++ "+afterPath, "+++ "+displayPath+" (formatted)", 1)
+func golinesBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "golines.exe"
+	}
 
-	return diff
+	return "golines"
+}
+
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	return !info.IsDir() && info.Mode()&0o111 != 0
+}
+
+func unifiedDiff(path string, before []byte, after []byte) (string, error) {
+	return difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+		A:        difflib.SplitLines(string(before)),
+		B:        difflib.SplitLines(string(after)),
+		FromFile: path,
+		ToFile:   path + " (formatted)",
+		Context:  3,
+	})
 }

@@ -90,6 +90,25 @@ func TestRunRejectsStdinWithPathArguments(t *testing.T) {
 	}
 }
 
+func TestRunRejectsNegativeJobs(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO([]string{"--check", "--jobs", "-1", "."}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 2 {
+		t.Fatalf("RunWithIO(--jobs -1) code = %d, want 2", code)
+	}
+
+	if !strings.Contains(stderr.String(), "--jobs must be non-negative") {
+		t.Fatalf("stderr missing jobs validation error:\n%s", stderr.String())
+	}
+
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
 func TestRunListChangedFilesWithoutDiff(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "main.go")

@@ -3,6 +3,7 @@ package formatrunner
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -219,6 +220,7 @@ func second() string {
 		Mode:         Check,
 		Paths:        []string{root},
 		GoToolchain:  "local",
+		Jobs:         1,
 		SkipGoLines:  true,
 		DiffMaxBytes: 1 << 20,
 		Progress: func(event ProgressEvent) {
@@ -279,6 +281,148 @@ func active(enabled bool) bool {
 	if strings.Contains(string(output), "return false\n\t}\n\n\treturn true") {
 		t.Fatalf("output included readability blank line despite SkipReadability:\n%s", output)
 	}
+}
+
+func TestRunCheckCanSkipDiffGeneration(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+	mustWrite(t, file, `package sample
+
+func active(enabled bool) bool {
+	if !enabled {
+		return false
+	}
+	return true
+}
+`)
+
+	result, err := Run(Options{
+		Mode:         Check,
+		Paths:        []string{root},
+		GoToolchain:  "local",
+		Jobs:         1,
+		SkipGoLines:  true,
+		Diff:         false,
+		DiffMaxBytes: 1 << 20,
+	})
+	if err == nil {
+		t.Fatal("Run(Check) error = nil, want formatting failure")
+	}
+
+	if !reflect.DeepEqual(result.ChangedFiles, []string{file}) {
+		t.Fatalf("ChangedFiles = %#v, want %#v", result.ChangedFiles, []string{file})
+	}
+
+	if result.Diff != "" {
+		t.Fatalf("Diff = %q, want empty when Diff is false", result.Diff)
+	}
+}
+
+func TestRunParallelResultsAreDeterministic(t *testing.T) {
+	root := t.TempDir()
+	files := []string{
+		filepath.Join(root, "a.go"),
+		filepath.Join(root, "b.go"),
+		filepath.Join(root, "c.go"),
+	}
+
+	for _, file := range files {
+		mustWrite(t, file, `package sample
+
+func active(enabled bool) bool {
+	if !enabled {
+		return false
+	}
+	return true
+}
+`)
+	}
+
+	result, err := Run(Options{
+		Mode:         Check,
+		Paths:        []string{root},
+		GoToolchain:  "local",
+		Jobs:         4,
+		SkipGoLines:  true,
+		Diff:         true,
+		DiffMaxBytes: 1 << 20,
+	})
+	if err == nil {
+		t.Fatal("Run(Check) error = nil, want formatting failure")
+	}
+
+	if !reflect.DeepEqual(result.CheckedFiles, files) {
+		t.Fatalf("CheckedFiles = %#v, want %#v", result.CheckedFiles, files)
+	}
+
+	if !reflect.DeepEqual(result.ChangedFiles, files) {
+		t.Fatalf("ChangedFiles = %#v, want %#v", result.ChangedFiles, files)
+	}
+
+	previous := -1
+
+	for _, file := range files {
+		current := strings.Index(result.Diff, "--- "+file)
+
+		if current < 0 {
+			t.Fatalf("Diff missing header for %s:\n%s", file, result.Diff)
+		}
+
+		if current <= previous {
+			t.Fatalf("Diff order is not deterministic for %s:\n%s", file, result.Diff)
+		}
+
+		previous = current
+	}
+
+	for idx, issue := range result.Issues {
+		if idx > 0 && issue.File < result.Issues[idx-1].File {
+			t.Fatalf("Issues out of file order: %#v", result.Issues)
+		}
+	}
+}
+
+func TestFormatSourceUsesExistingCachedGolinesBinary(t *testing.T) {
+	cacheRoot := t.TempDir()
+	binDir := filepath.Join(cacheRoot, "golines", GolinesVersion)
+
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir golines cache: %v", err)
+	}
+
+	marker := filepath.Join(cacheRoot, "used")
+	binPath := filepath.Join(binDir, golinesBinaryName())
+	script := "#!/bin/sh\n" +
+		"printf used > " + shellQuote(marker) + "\n" +
+		"while [ \"$#\" -gt 0 ]; do shift; done\n" +
+		"cat\n"
+
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake golines binary: %v", err)
+	}
+
+	_, _, err := FormatSource("sample.go", []byte(`package sample
+
+func value() string {
+	return "ok"
+}
+`), Options{
+		MaxLen:          80,
+		GoToolchain:     "local",
+		SkipReadability: true,
+		golinesCacheDir: cacheRoot,
+	})
+	if err != nil {
+		t.Fatalf("FormatSource error = %v", err)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("cached golines binary was not used: %v", err)
+	}
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func mustWrite(t *testing.T, path string, body string) {

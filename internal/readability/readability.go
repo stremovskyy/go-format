@@ -1,6 +1,7 @@
 package readability
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"go/ast"
@@ -181,18 +182,36 @@ func normalizeRecursivePath(path string) string {
 
 func IsGenerated(src []byte) bool {
 	lines := splitLines(src)
-	header := strings.Join(lines[:min(20, len(lines))], "\n")
 
-	return strings.Contains(header, "Code generated") && strings.Contains(header, "DO NOT EDIT")
+	return generatedHeader(lines)
 }
 
 func isGeneratedPath(path string) bool {
-	src, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return false
 	}
 
-	return IsGenerated(src)
+	defer file.Close()
+
+	lines := make([]string, 0, 20)
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+
+		if len(lines) >= 20 {
+			break
+		}
+	}
+
+	return generatedHeader(lines)
+}
+
+func generatedHeader(lines []string) bool {
+	header := strings.Join(lines[:min(20, len(lines))], "\n")
+
+	return strings.Contains(header, "Code generated") && strings.Contains(header, "DO NOT EDIT")
 }
 
 func skipDir(name string, includeHidden bool) bool {

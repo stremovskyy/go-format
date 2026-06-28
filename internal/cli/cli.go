@@ -17,8 +17,8 @@ var Version = "dev"
 const Usage = `go-format formats Go source using gofmt, golines, gofumpt, and logical blank-line rules.
 
 Usage:
-  go-format --write [--list] [--max-len N] [path ...]
-  go-format --check [--list] [--diff=false] [--max-len N] [path ...]
+  go-format --write [--list] [--jobs N] [--max-len N] [path ...]
+  go-format --check [--list] [--diff=false] [--jobs N] [--max-len N] [path ...]
   go-format --stdin [--stdin-path file.go]
   go-format --version
 
@@ -45,6 +45,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	printDiff := fs.Bool("diff", true, "print unified diffs in check mode")
 	list := fs.Bool("list", false, "print changed file paths")
 	maxLen := fs.Int("max-len", 120, "target maximum line length for golines")
+	jobs := fs.Int("jobs", 0, "number of files to format concurrently; 0 uses GOMAXPROCS")
 	goToolchain := fs.String(
 		"go-toolchain",
 		envDefault("GO_TOOLCHAIN", "local"),
@@ -62,6 +63,12 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+
+		return 2
+	}
+
+	if *jobs < 0 {
+		fmt.Fprintln(stderr, "--jobs must be non-negative")
 
 		return 2
 	}
@@ -145,9 +152,11 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		Paths:           fs.Args(),
 		MaxLen:          *maxLen,
 		GoToolchain:     *goToolchain,
+		Jobs:            *jobs,
 		SkipGoLines:     *skipGolines,
 		SkipReadability: *skipReadability,
 		IncludeHidden:   *includeHidden,
+		Diff:            *printDiff,
 		DiffMaxBytes:    8 << 20,
 		Progress:        progressFunc,
 	})
