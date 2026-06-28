@@ -17,6 +17,8 @@ type Config struct {
 	MaxLen          int      `yaml:"max_len"`
 	SkipGoLines     bool     `yaml:"skip_golines"`
 	SkipReadability bool     `yaml:"skip_readability"`
+	Advice          bool     `yaml:"advice"`
+	AdviceFail      bool     `yaml:"advice_fail"`
 	IncludeHidden   bool     `yaml:"include_hidden"`
 	GoToolchain     string   `yaml:"go_toolchain"`
 	Exclude         []string `yaml:"exclude"`
@@ -26,6 +28,8 @@ type fileConfig struct {
 	MaxLen          *int     `yaml:"max_len"`
 	SkipGoLines     *bool    `yaml:"skip_golines"`
 	SkipReadability *bool    `yaml:"skip_readability"`
+	Advice          *bool    `yaml:"advice"`
+	AdviceFail      *bool    `yaml:"advice_fail"`
 	IncludeHidden   *bool    `yaml:"include_hidden"`
 	GoToolchain     *string  `yaml:"go_toolchain"`
 	Exclude         []string `yaml:"exclude"`
@@ -85,6 +89,14 @@ func Decode(reader io.Reader, base Config) (Config, error) {
 
 	if raw.SkipReadability != nil {
 		cfg.SkipReadability = *raw.SkipReadability
+	}
+
+	if raw.Advice != nil {
+		cfg.Advice = *raw.Advice
+	}
+
+	if raw.AdviceFail != nil {
+		cfg.AdviceFail = *raw.AdviceFail
 	}
 
 	if raw.IncludeHidden != nil {

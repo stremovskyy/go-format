@@ -1,6 +1,7 @@
 package formatrunner
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -154,6 +155,75 @@ func bad( value string ) string { return value }
 
 	if !reflect.DeepEqual(result.CheckedFiles, []string{kept}) {
 		t.Fatalf("CheckedFiles = %#v, want only %#v", result.CheckedFiles, []string{kept})
+	}
+}
+
+func TestRunCanCollectAdviceIssuesWithoutFailing(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+	mustWrite(t, file, `package sample
+
+type Config struct{}
+`)
+
+	result, err := Run(Options{
+		Mode:         Check,
+		Paths:        []string{root},
+		GoToolchain:  "local",
+		SkipGoLines:  true,
+		DiffMaxBytes: 1 << 20,
+		Advice:       true,
+	})
+	if err != nil {
+		t.Fatalf("Run(Check Advice) error = %v", err)
+	}
+
+	if len(result.ChangedFiles) != 0 {
+		t.Fatalf("ChangedFiles = %#v, want none for advice-only run", result.ChangedFiles)
+	}
+
+	if len(result.Issues) != 1 {
+		t.Fatalf("Issues = %#v, want one advice issue", result.Issues)
+	}
+
+	issue := result.Issues[0]
+
+	if issue.Rule != "exported-doc" || issue.Fixable {
+		t.Fatalf("advice issue = %#v, want non-fixable exported-doc", issue)
+	}
+}
+
+func TestRunAdviceFailReturnsAdviceFailedError(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "main.go"), `package sample
+
+type Config struct{}
+`)
+
+	result, err := Run(Options{
+		Mode:         Check,
+		Paths:        []string{root},
+		GoToolchain:  "local",
+		SkipGoLines:  true,
+		DiffMaxBytes: 1 << 20,
+		AdviceFail:   true,
+	})
+	if err == nil {
+		t.Fatal("Run(Check AdviceFail) error = nil, want advice failure")
+	}
+
+	var adviceErr AdviceFailedError
+
+	if !errors.As(err, &adviceErr) {
+		t.Fatalf("Run(Check AdviceFail) error = %T %[1]v, want AdviceFailedError", err)
+	}
+
+	if len(result.Issues) != 1 {
+		t.Fatalf("Issues = %#v, want one advice issue", result.Issues)
+	}
+
+	if len(adviceErr.Issues) != 1 {
+		t.Fatalf("AdviceFailedError issues = %#v, want one issue", adviceErr.Issues)
 	}
 }
 

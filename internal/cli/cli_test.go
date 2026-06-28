@@ -184,6 +184,121 @@ func active() bool {
 	}
 }
 
+func TestRunPrintsAdviceWithoutFailing(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+
+	if err := os.WriteFile(file, []byte(`package sample
+
+type Config struct{}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--check", "--skip-golines", "--advice", "--progress=false", root},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 0 {
+		t.Fatalf("RunWithIO --advice code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), file+":3: exported-doc: exported type Config should have a doc comment") {
+		t.Fatalf("stderr missing advice issue:\n%s", stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), "go-format: 1 Go file(s) checked; no changes needed") {
+		t.Fatalf("stdout missing check summary:\n%s", stdout.String())
+	}
+}
+
+func TestRunAdviceFlagDoesNotWriteByDefault(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+	original := `package sample
+
+type Config struct{}
+
+func active(enabled bool) bool {
+	if !enabled {
+		return false
+	}
+	return true
+}
+`
+
+	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--advice", "--skip-golines", "--progress=false", root},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 1 {
+		t.Fatalf("RunWithIO --advice dirty code = %d, want formatting check failure\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+
+	body, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	if string(body) != original {
+		t.Fatalf("--advice rewrote file by default:\n%s", body)
+	}
+
+	if !strings.Contains(stderr.String(), file+":3: exported-doc: exported type Config should have a doc comment") {
+		t.Fatalf("stderr missing advice issue:\n%s", stderr.String())
+	}
+}
+
+func TestRunAdviceFailReturnsNonZero(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+
+	if err := os.WriteFile(file, []byte(`package sample
+
+type Config struct{}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--check", "--skip-golines", "--advice-fail", "--progress=false", root},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 1 {
+		t.Fatalf("RunWithIO --advice-fail code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), file+":3: exported-doc: exported type Config should have a doc comment") {
+		t.Fatalf("stderr missing advice issue:\n%s", stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), "go-format: 1 advice issue(s) found") {
+		t.Fatalf("stderr missing advice failure summary:\n%s", stderr.String())
+	}
+}
+
 func TestRunLoadsConfigFromCurrentDirectory(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "main.go")
@@ -236,6 +351,55 @@ func active(enabled bool) bool {
 			stdout.String(),
 			stderr.String(),
 		)
+	}
+}
+
+func TestRunLoadsAdviceConfigFromCurrentDirectory(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+
+	if err := os.WriteFile(filepath.Join(root, ".go-format.yml"), []byte("advice: true\nadvice_fail: true\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := os.WriteFile(file, []byte(`package sample
+
+type Config struct{}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir %s: %v", root, err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--check", "--skip-golines", "--progress=false", "."},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 1 {
+		t.Fatalf("RunWithIO advice config code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), "main.go:3: exported-doc: exported type Config should have a doc comment") {
+		t.Fatalf("stderr missing configured advice issue:\n%s", stderr.String())
 	}
 }
 
@@ -347,6 +511,35 @@ func active(enabled bool) bool {
 	}
 }
 
+func TestRunStdinAdvicePrintsDiagnosticsToStderr(t *testing.T) {
+	input := `package sample
+
+type Config struct{}
+`
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--stdin", "--stdin-path", "input.go", "--skip-golines", "--advice"},
+		strings.NewReader(input),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 0 {
+		t.Fatalf("RunWithIO stdin advice code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), "type Config struct{}") {
+		t.Fatalf("stdout missing formatted source:\n%s", stdout.String())
+	}
+
+	if !strings.Contains(stderr.String(), "input.go:3: exported-doc: exported type Config should have a doc comment") {
+		t.Fatalf("stderr missing stdin advice issue:\n%s", stderr.String())
+	}
+}
+
 func TestRunPrintsEffectiveConfig(t *testing.T) {
 	root := t.TempDir()
 
@@ -435,6 +628,8 @@ func TestRunInitWritesDefaultConfig(t *testing.T) {
 		"max_len: 120",
 		"skip_golines: false",
 		"skip_readability: false",
+		"advice: false",
+		"advice_fail: false",
 		"include_hidden: false",
 		"go_toolchain: local",
 		"exclude: []",

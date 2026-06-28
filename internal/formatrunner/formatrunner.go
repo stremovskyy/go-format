@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/pmezard/go-difflib/difflib"
+	"github.com/stremovskyy/go-format/internal/advice"
 	"github.com/stremovskyy/go-format/internal/readability"
 	gofumpt "mvdan.cc/gofumpt/format"
 )
@@ -33,12 +34,15 @@ type Options struct {
 	GoToolchain     string
 	SkipGoLines     bool
 	SkipReadability bool
+	Advice          bool
+	AdviceFail      bool
 	Jobs            int
 	Diff            bool
 	DiffMaxBytes    int
 	IncludeHidden   bool
 	Exclude         []string
-	Progress        func(ProgressEvent)
+
+	Progress func(ProgressEvent)
 
 	golinesBinary   string
 	golinesCacheDir string
@@ -64,6 +68,14 @@ type CheckFailedError struct {
 
 func (err CheckFailedError) Error() string {
 	return fmt.Sprintf("go-format check failed: %d file(s) need formatting", len(err.ChangedFiles))
+}
+
+type AdviceFailedError struct {
+	Issues []readability.Issue
+}
+
+func (err AdviceFailedError) Error() string {
+	return fmt.Sprintf("go-format advice failed: %d issue(s) found", len(err.Issues))
 }
 
 func Run(opts Options) (Result, error) {
@@ -133,6 +145,14 @@ func Run(opts Options) (Result, error) {
 		}
 
 		return result, CheckFailedError{ChangedFiles: result.ChangedFiles}
+	}
+
+	if opts.AdviceFail {
+		issues := adviceIssues(result.Issues)
+
+		if len(issues) > 0 {
+			return result, AdviceFailedError{Issues: issues}
+		}
 	}
 
 	return result, nil
@@ -236,6 +256,17 @@ func processFile(index int, file string, opts Options) fileRunResult {
 
 	result.issues = issues
 
+	if opts.Advice {
+		adviceIssues, err := advice.Analyze(file, formatted)
+		if err != nil {
+			result.err = err
+
+			return result
+		}
+
+		result.issues = append(result.issues, adviceIssues...)
+	}
+
 	if bytes.Equal(original, formatted) {
 		return result
 	}
@@ -334,7 +365,23 @@ func normalizeOptions(opts Options) Options {
 		opts.Jobs = runtime.GOMAXPROCS(0)
 	}
 
+	if opts.AdviceFail {
+		opts.Advice = true
+	}
+
 	return opts
+}
+
+func adviceIssues(issues []readability.Issue) []readability.Issue {
+	filtered := make([]readability.Issue, 0, len(issues))
+
+	for _, issue := range issues {
+		if !issue.Fixable {
+			filtered = append(filtered, issue)
+		}
+	}
+
+	return filtered
 }
 
 func runGolines(path string, src []byte, opts Options) ([]byte, error) {

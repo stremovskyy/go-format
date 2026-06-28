@@ -24,6 +24,8 @@ func TestCLIHelpMentionsInstallableCommand(t *testing.T) {
 		"--list",
 		"--diff",
 		"--jobs",
+		"--advice",
+		"--advice-fail",
 		"--config",
 		"--no-config",
 		"--init",

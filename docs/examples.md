@@ -1,11 +1,13 @@
 # Examples
 
 `go-format` is meant for Go projects that already trust `gofmt`, but want a
-single command that also handles long lines, stricter formatting, and a small
-readability pass for dense code.
+single command that also handles long lines, stricter formatting, a readability
+pass for dense code, and optional non-mutating optimization advice.
 
 The output is still ordinary Go source. The tool does not rewrite architecture,
 rename symbols, reorder logic, or insert blank lines between every statement.
+Advice mode follows the same safety rule: it reports opportunities but does not
+move symbols, split files, reorder fields, or change source bytes.
 
 ## Common Commands
 
@@ -43,6 +45,18 @@ Run without the logical blank-line pass:
 
 ```sh
 go-format --write --skip-readability ./...
+```
+
+Print advice without failing:
+
+```sh
+go-format --advice ./...
+```
+
+Fail CI on advice issues:
+
+```sh
+go-format --check --advice-fail ./...
 ```
 
 Create and inspect project defaults:
@@ -197,6 +211,37 @@ values := map[string]string{
 
 This is better for reviews because diffs stop forcing horizontal scrolling.
 
+### Non-Mutating Advice
+
+Advice mode reports optimization and maintenance opportunities to standard
+error. Without an explicit `--write`, it runs in check mode and does not change
+files:
+
+```sh
+go-format --advice ./...
+```
+
+Example output is written to standard error:
+
+```text
+internal/service/config.go:12: struct-padding: struct Config may waste memory: field Count follows smaller field Flag
+internal/service/config.go:24: receiver-name: receiver name for Config is inconsistent: saw c and cfg
+internal/service/fetch.go:18: context-first: context.Context should be the first parameter
+internal/service/fetch.go:20: error-wrap: fmt.Errorf should wrap err with %w instead of %v
+internal/service/cache.go:31: defer-in-loop: defer inside loop may delay cleanup until function return
+internal/service/cache.go:44: regexp-mustcompile: regexp.MustCompile inside function should be hoisted to package scope
+internal/service/list.go:55: append-prealloc: append in loop to values may need preallocation
+internal/service/render.go:67: builder-grow: strings.Builder b writes string literals without Grow
+internal/service/public.go:3: todo-format: TODO should use format TODO(owner): text
+internal/service/public.go:10: exported-doc: exported type Config should have a doc comment
+```
+
+Use `--advice-fail` in CI when these findings should fail the run:
+
+```sh
+go-format --check --advice-fail ./...
+```
+
 ### CI Output
 
 For local development, diffs are useful:
@@ -245,6 +290,8 @@ local scripts should share the same defaults:
 max_len: 120
 skip_golines: false
 skip_readability: false
+advice: false
+advice_fail: false
 include_hidden: false
 go_toolchain: local
 exclude:

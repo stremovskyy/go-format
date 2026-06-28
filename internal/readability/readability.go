@@ -18,7 +18,14 @@ import (
 type Issue struct {
 	File    string
 	Line    int
+	Rule    string
 	Message string
+	Fixable bool
+}
+
+type insertion struct {
+	rule    string
+	message string
 }
 
 func Rewrite(path string, src []byte) ([]byte, []Issue, error) {
@@ -34,7 +41,10 @@ func Rewrite(path string, src []byte) ([]byte, []Issue, error) {
 
 	lines := splitLines(src)
 	comments := commentSpans(fset, file)
-	insertions := map[int]string{}
+	insertions := map[int]insertion{}
+
+	checkTopLevelDecls(fset, lines, comments, file.Decls, insertions)
+	checkTypeFieldGroups(fset, lines, comments, file.Decls, insertions)
 
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch current := node.(type) {
@@ -44,6 +54,10 @@ func Rewrite(path string, src []byte) ([]byte, []Issue, error) {
 			checkStmtList(fset, lines, comments, current.Body, insertions)
 		case *ast.CommClause:
 			checkStmtList(fset, lines, comments, current.Body, insertions)
+		case *ast.SwitchStmt:
+			checkSwitchClauses(fset, lines, current.Body.List, insertions)
+		case *ast.TypeSwitchStmt:
+			checkSwitchClauses(fset, lines, current.Body.List, insertions)
 		}
 
 		return true
@@ -51,8 +65,14 @@ func Rewrite(path string, src []byte) ([]byte, []Issue, error) {
 
 	issues := make([]Issue, 0, len(insertions))
 
-	for line, message := range insertions {
-		issues = append(issues, Issue{File: path, Line: line, Message: message})
+	for line, item := range insertions {
+		issues = append(issues, Issue{
+			File:    path,
+			Line:    line,
+			Rule:    item.rule,
+			Message: item.message,
+			Fixable: true,
+		})
 	}
 
 	sort.Slice(issues, func(i, j int) bool {
@@ -322,18 +342,215 @@ func commentSpans(fset *token.FileSet, file *ast.File) []commentSpan {
 	return comments
 }
 
+func checkTopLevelDecls(
+	fset *token.FileSet,
+	lines []string,
+	comments []commentSpan,
+	decls []ast.Decl,
+	insertions map[int]insertion,
+) {
+	for idx := 1; idx < len(decls); idx++ {
+		prev := decls[idx-1]
+		curr := decls[idx]
+
+		rule, message, ok := blankBeforeDecl(prev, curr)
+
+		if !ok {
+			continue
+		}
+
+		prevEnd := fset.Position(prev.End()).Line
+		currStart := fset.Position(curr.Pos()).Line
+		line := insertionLine(prevEnd, currStart, comments)
+
+		if hasBlankBetweenLines(lines, prevEnd, line) {
+			continue
+		}
+
+		addInsertion(insertions, line, rule, message)
+	}
+}
+
+func blankBeforeDecl(prev ast.Decl, curr ast.Decl) (string, string, bool) {
+	prevKind := declGroupKind(prev)
+	currKind := declGroupKind(curr)
+
+	if prevKind == "" || currKind == "" {
+		return "", "", false
+	}
+
+	if prevKind != currKind {
+		return "decl-spacing", "missing blank line before top-level declaration group", true
+	}
+
+	prevReceiver := receiverTypeName(prev)
+	currReceiver := receiverTypeName(curr)
+
+	if prevReceiver != "" && currReceiver != "" && prevReceiver != currReceiver {
+		return "receiver-spacing", "missing blank line before methods for different receiver type", true
+	}
+
+	return "", "", false
+}
+
+func declGroupKind(decl ast.Decl) string {
+	switch current := decl.(type) {
+	case *ast.GenDecl:
+		return current.Tok.String()
+	case *ast.FuncDecl:
+		return "func"
+	default:
+		return ""
+	}
+}
+
+func receiverTypeName(decl ast.Decl) string {
+	current, ok := decl.(*ast.FuncDecl)
+
+	if !ok || current.Recv == nil || len(current.Recv.List) == 0 {
+		return ""
+	}
+
+	return exprNameForGrouping(current.Recv.List[0].Type)
+}
+
+func exprNameForGrouping(expr ast.Expr) string {
+	switch current := expr.(type) {
+	case *ast.Ident:
+		return current.Name
+	case *ast.StarExpr:
+		return exprNameForGrouping(current.X)
+	case *ast.IndexExpr:
+		return exprNameForGrouping(current.X)
+	case *ast.IndexListExpr:
+		return exprNameForGrouping(current.X)
+
+	case *ast.SelectorExpr:
+		prefix := exprNameForGrouping(current.X)
+
+		if prefix == "" {
+			return current.Sel.Name
+		}
+
+		return prefix + "." + current.Sel.Name
+
+	default:
+		return ""
+	}
+}
+
+func checkTypeFieldGroups(
+	fset *token.FileSet,
+	lines []string,
+	comments []commentSpan,
+	decls []ast.Decl,
+	insertions map[int]insertion,
+) {
+	for _, decl := range decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+
+			if !ok {
+				continue
+			}
+
+			switch current := typeSpec.Type.(type) {
+			case *ast.StructType:
+				checkFieldListGroups(
+					fset,
+					lines,
+					comments,
+					current.Fields.List,
+					structFieldCategory,
+					"struct-field-groups",
+					"missing blank line before struct field group",
+					insertions,
+				)
+
+			case *ast.InterfaceType:
+				checkFieldListGroups(
+					fset,
+					lines,
+					comments,
+					current.Methods.List,
+					interfaceFieldCategory,
+					"interface-field-groups",
+					"missing blank line before interface member group",
+					insertions,
+				)
+			}
+		}
+	}
+}
+
+func checkFieldListGroups(
+	fset *token.FileSet,
+	lines []string,
+	comments []commentSpan,
+	fields []*ast.Field,
+	category func(*ast.Field) string,
+	rule string,
+	message string,
+	insertions map[int]insertion,
+) {
+	for idx := 1; idx < len(fields); idx++ {
+		prev := fields[idx-1]
+		curr := fields[idx]
+
+		if category(prev) == category(curr) {
+			continue
+		}
+
+		prevEnd := fset.Position(prev.End()).Line
+		currStart := fset.Position(curr.Pos()).Line
+		line := insertionLine(prevEnd, currStart, comments)
+
+		if hasBlankBetweenLines(lines, prevEnd, line) {
+			continue
+		}
+
+		addInsertion(insertions, line, rule, message)
+	}
+}
+
+func structFieldCategory(field *ast.Field) string {
+	if len(field.Names) == 0 {
+		return "embedded"
+	}
+
+	if _, ok := field.Type.(*ast.FuncType); ok {
+		return "callback"
+	}
+
+	return "field"
+}
+
+func interfaceFieldCategory(field *ast.Field) string {
+	if len(field.Names) == 0 {
+		return "embedded"
+	}
+
+	return "method"
+}
+
 func checkStmtList(
 	fset *token.FileSet,
 	lines []string,
 	comments []commentSpan,
 	stmts []ast.Stmt,
-	insertions map[int]string,
+	insertions map[int]insertion,
 ) {
 	for idx := 1; idx < len(stmts); idx++ {
 		prev := stmts[idx-1]
 		curr := stmts[idx]
 
-		if needsBlankBefore(prev, curr, idx == len(stmts)-1) {
+		if rule, message, ok := blankBeforeStmt(prev, curr, idx == len(stmts)-1); ok {
 			prevEnd := fset.Position(prev.End()).Line
 			currStart := fset.Position(curr.Pos()).Line
 			line := insertionLine(prevEnd, currStart, comments)
@@ -342,45 +559,170 @@ func checkStmtList(
 				continue
 			}
 
-			insertions[line] = "missing blank line before logical block"
+			addInsertion(insertions, line, rule, message)
 		}
 	}
 }
 
-func needsBlankBefore(prev ast.Stmt, curr ast.Stmt, isLast bool) bool {
-	if isCoupledErrorCheck(prev, curr) {
-		return false
-	}
+func checkSwitchClauses(
+	fset *token.FileSet,
+	lines []string,
+	clauses []ast.Stmt,
+	insertions map[int]insertion,
+) {
+	for idx := 1; idx < len(clauses); idx++ {
+		prev, prevOK := clauses[idx-1].(*ast.CaseClause)
+		curr, currOK := clauses[idx].(*ast.CaseClause)
 
-	if isStandaloneControl(prev) {
+		if !prevOK || !currOK || (!caseClauseIsLarge(fset, prev) && !caseClauseIsLarge(fset, curr)) {
+			continue
+		}
+
+		prevEnd := fset.Position(prev.End()).Line
+		currStart := fset.Position(curr.Pos()).Line
+
+		if hasBlankBetweenLines(lines, prevEnd, currStart) {
+			continue
+		}
+
+		addInsertion(
+			insertions,
+			currStart,
+			"switch-case-spacing",
+			"missing blank line before large switch case group",
+		)
+	}
+}
+
+func caseClauseIsLarge(fset *token.FileSet, clause *ast.CaseClause) bool {
+	if len(clause.Body) > 1 {
 		return true
 	}
 
-	if startsLockGroup(curr) && !startsLockGroup(prev) {
-		return true
-	}
+	if len(clause.Body) == 1 {
+		start := fset.Position(clause.Body[0].Pos()).Line
+		end := fset.Position(clause.Body[0].End()).Line
 
-	if isUnlockDefer(prev) && !isUnlockDefer(curr) {
-		return true
-	}
-
-	if isDefer(prev) && !isDefer(curr) {
-		return true
-	}
-
-	if isLoopOrSwitch(curr) && !isLoopOrSwitch(prev) {
-		return true
-	}
-
-	if isDecision(curr) && !isDecision(prev) {
-		return true
-	}
-
-	if isLast && isReturn(curr) {
-		return true
+		return end > start
 	}
 
 	return false
+}
+
+func blankBeforeStmt(prev ast.Stmt, curr ast.Stmt, isLast bool) (string, string, bool) {
+	if isCoupledErrorCheck(prev, curr) {
+		return "", "", false
+	}
+
+	if isStandaloneControl(prev) {
+		return "logical-block-spacing", "missing blank line after standalone control block", true
+	}
+
+	if startsLockGroup(curr) && !startsLockGroup(prev) {
+		return "logical-block-spacing", "missing blank line before lock group", true
+	}
+
+	if isUnlockDefer(prev) && !isUnlockDefer(curr) {
+		return "logical-block-spacing", "missing blank line after unlock defer", true
+	}
+
+	if isDefer(prev) && !isDefer(curr) {
+		return "logical-block-spacing", "missing blank line after defer group", true
+	}
+
+	if isLoopOrSwitch(curr) && !isLoopOrSwitch(prev) {
+		return "logical-block-spacing", "missing blank line before loop or switch", true
+	}
+
+	if isTestingRun(curr) && !isTestingRun(prev) {
+		return "test-flow-spacing", "missing blank line before subtest block", true
+	}
+
+	if isTestAssertion(curr) && !isTestAssertion(prev) {
+		return "test-flow-spacing", "missing blank line before test flow block", true
+	}
+
+	if isDecision(curr) && !isDecision(prev) {
+		return "logical-block-spacing", "missing blank line before decision block", true
+	}
+
+	if isLast && isReturn(curr) {
+		return "logical-block-spacing", "missing blank line before final return", true
+	}
+
+	return "", "", false
+}
+
+func isTestingRun(stmt ast.Stmt) bool {
+	call, ok := stmtCall(stmt)
+
+	if !ok {
+		return false
+	}
+
+	_, name, ok := selectorCallName(call)
+
+	return ok && name == "Run"
+}
+
+func isTestAssertion(stmt ast.Stmt) bool {
+	call, ok := stmtCall(stmt)
+
+	if !ok {
+		return false
+	}
+
+	receiver, name, ok := selectorCallName(call)
+
+	if !ok {
+		return false
+	}
+
+	if receiver == "assert" || receiver == "require" {
+		switch name {
+		case "Equal", "NotEqual", "NoError", "Error", "ErrorIs", "ErrorAs",
+			"True", "False", "Contains", "Len", "Empty", "NotEmpty",
+			"Nil", "NotNil", "Fail", "FailNow":
+			return true
+		}
+	}
+
+	if receiver == "t" || receiver == "b" {
+		switch name {
+		case "Error", "Errorf", "Fatal", "Fatalf", "Fail", "FailNow":
+			return true
+		}
+	}
+
+	return false
+}
+
+func stmtCall(stmt ast.Stmt) (*ast.CallExpr, bool) {
+	exprStmt, ok := stmt.(*ast.ExprStmt)
+
+	if !ok {
+		return nil, false
+	}
+
+	call, ok := exprStmt.X.(*ast.CallExpr)
+
+	return call, ok
+}
+
+func selectorCallName(call *ast.CallExpr) (string, string, bool) {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+
+	if !ok {
+		return "", "", false
+	}
+
+	receiver, ok := selector.X.(*ast.Ident)
+
+	if !ok {
+		return "", "", false
+	}
+
+	return receiver.Name, selector.Sel.Name, true
 }
 
 func isStandaloneControl(stmt ast.Stmt) bool {
@@ -517,6 +859,7 @@ func stmtAssignsName(stmt ast.Stmt, name string) bool {
 				return true
 			}
 		}
+
 	case *ast.DeclStmt:
 		decl, ok := current.Decl.(*ast.GenDecl)
 
@@ -591,7 +934,15 @@ func hasBlankBetweenLines(lines []string, prevEnd int, currStart int) bool {
 	return false
 }
 
-func applyInsertions(src []byte, insertions map[int]string) []byte {
+func addInsertion(insertions map[int]insertion, line int, rule string, message string) {
+	if _, exists := insertions[line]; exists {
+		return
+	}
+
+	insertions[line] = insertion{rule: rule, message: message}
+}
+
+func applyInsertions(src []byte, insertions map[int]insertion) []byte {
 	lines := splitLines(src)
 	endsWithNewline := bytes.HasSuffix(src, []byte("\n"))
 	out := make([]string, 0, len(lines)+len(insertions))

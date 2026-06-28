@@ -15,6 +15,8 @@ func TestLoadFileMergesYAMLWithDefaults(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`max_len: 100
 skip_golines: true
 skip_readability: true
+advice: true
+advice_fail: true
 include_hidden: true
 go_toolchain: auto
 exclude:
@@ -33,7 +35,7 @@ exclude:
 		t.Fatalf("MaxLen = %d, want 100", cfg.MaxLen)
 	}
 
-	if !cfg.SkipGoLines || !cfg.SkipReadability || !cfg.IncludeHidden {
+	if !cfg.SkipGoLines || !cfg.SkipReadability || !cfg.Advice || !cfg.AdviceFail || !cfg.IncludeHidden {
 		t.Fatalf("bool config not applied: %#v", cfg)
 	}
 

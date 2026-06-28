@@ -42,6 +42,10 @@ func active(enabled bool, count int) bool {
 		t.Fatal("Rewrite issues = 0, want dense logical-block issues")
 	}
 
+	if issues[0].Rule != "logical-block-spacing" || !issues[0].Fixable {
+		t.Fatalf("Rewrite issue metadata = %#v, want logical-block-spacing fixable issue", issues[0])
+	}
+
 	output := string(result)
 
 	for _, expected := range []string{
@@ -168,6 +172,141 @@ func notifyLoaded() error {
 
 	if strings.Contains(output, "side effect.\n\n\tnotify(value)") {
 		t.Fatalf("comment was separated from its statement:\n%s", output)
+	}
+}
+
+func TestRewriteAddsTopLevelDeclarationSpacing(t *testing.T) {
+	input := []byte(`package sample
+
+const timeout = 1
+var enabled = true
+type Config struct{}
+func NewConfig() Config {
+	return Config{}
+}
+func (Config) Name() string {
+	return "config"
+}
+func (Config) Ready() bool {
+	return true
+}
+func (Runner) Run() {}
+`)
+
+	result, issues, err := Rewrite("sample.go", input)
+	if err != nil {
+		t.Fatalf("Rewrite error = %v", err)
+	}
+
+	if len(issues) == 0 {
+		t.Fatal("Rewrite issues = 0, want declaration spacing issues")
+	}
+
+	output := string(result)
+
+	for _, expected := range []string{
+		"const timeout = 1\n\nvar enabled = true",
+		"var enabled = true\n\ntype Config struct{}",
+		"}\n\nfunc NewConfig() Config",
+		"return \"config\"\n}\nfunc (Config) Ready() bool",
+		"return true\n}\n\nfunc (Runner) Run() {}",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("rewritten output missing %q:\n%s", expected, output)
+		}
+	}
+}
+
+func TestRewriteAddsStructAndInterfaceFieldGroupSpacingWithoutReordering(t *testing.T) {
+	input := []byte(`package sample
+
+type Server struct {
+	Logger
+	Name string
+	Port int
+	OnStart func() error
+	OnStop func()
+}
+
+type Store interface {
+	io.Closer
+	Load(id string) (Item, error)
+	Save(item Item) error
+}
+`)
+
+	result, issues, err := Rewrite("sample.go", input)
+	if err != nil {
+		t.Fatalf("Rewrite error = %v", err)
+	}
+
+	if len(issues) == 0 {
+		t.Fatal("Rewrite issues = 0, want field grouping issues")
+	}
+
+	output := string(result)
+
+	for _, expected := range []string{
+		"Logger\n\n\tName string",
+		"Port int\n\n\tOnStart func() error",
+		"io.Closer\n\n\tLoad(id string) (Item, error)",
+		"Logger\n\n\tName string\n\tPort int\n\n\tOnStart func() error\n\tOnStop func()",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("rewritten output missing %q:\n%s", expected, output)
+		}
+	}
+}
+
+func TestRewriteAddsSwitchCaseAndTestFlowSpacing(t *testing.T) {
+	input := []byte(`package sample
+
+import "testing"
+
+func state(value int) string {
+	switch value {
+	case 0:
+		value++
+		return "zero"
+	case 1:
+		return "one"
+	default:
+		value--
+		return "many"
+	}
+}
+
+func TestState(t *testing.T) {
+	got := state(0)
+	assert.Equal(t, "zero", got)
+	t.Run("nested", func(t *testing.T) {
+		got := state(1)
+		assert.Equal(t, "one", got)
+	})
+}
+`)
+
+	result, issues, err := Rewrite("sample_test.go", input)
+	if err != nil {
+		t.Fatalf("Rewrite error = %v", err)
+	}
+
+	if len(issues) == 0 {
+		t.Fatal("Rewrite issues = 0, want switch/test flow issues")
+	}
+
+	output := string(result)
+
+	for _, expected := range []string{
+		"return \"zero\"\n\n\tcase 1:",
+		"return \"one\"\n\n\tdefault:",
+		"got := state(0)\n\n\tassert.Equal(t, \"zero\", got)",
+		"assert.Equal(t, \"zero\", got)\n\n\tt.Run(\"nested\"",
+		"got := state(1)\n\n\t\tassert.Equal(t, \"one\", got)",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("rewritten output missing %q:\n%s", expected, output)
+		}
 	}
 }
 

@@ -13,12 +13,15 @@ It runs:
 - pinned `golines` for long-line wrapping
 - `gofumpt`
 - a logical blank-line pass for dense functions
+- optional non-mutating optimization advice
 
 The blank-line pass separates guard clauses, validation and normalization,
 setup/defer cleanup blocks, decision branches, lock groups, loops/switches, and
 final returns. It keeps coupled `value, err := call()` / `if err != nil` pairs
 together and keeps leading comments attached to the statement they describe.
-It does not insert blank lines between every statement.
+It also separates top-level declaration groups, receiver groups, field groups,
+large switch cases, and test flow blocks. It does not insert blank lines between
+every statement.
 
 ## Installation
 
@@ -68,6 +71,18 @@ Format editor input from stdin:
 
 ```sh
 go-format --stdin --stdin-path internal/cli/cli.go < internal/cli/cli.go
+```
+
+Print non-mutating optimization advice:
+
+```sh
+go-format --advice ./...
+```
+
+Fail CI when advice issues are found:
+
+```sh
+go-format --check --advice-fail ./...
 ```
 
 Create a project config:
@@ -130,6 +145,15 @@ Go module and user cache. Later runs reuse the cached `golines` binary. Use
 `--skip-golines` for environments that must avoid that subprocess. Use
 `--skip-readability` to disable only the logical blank-line pass.
 
+`--advice` prints non-mutating optimization findings to standard error. Without
+an explicit `--write`, advice runs in check mode and does not rewrite files.
+Advice includes struct padding opportunities, inconsistent receiver names,
+misplaced `context.Context`, missed `%w` error wrapping, `defer` inside loops,
+function-local `regexp.MustCompile`, append-in-loop preallocation candidates,
+`strings.Builder` literals without `Grow`, missing GoDoc on exported symbols,
+and TODO format checks. Use `--advice-fail` to exit with status `1` when advice
+issues are found.
+
 ## Configuration
 
 `go-format` discovers `.go-format.yml` from the current directory upward. CLI
@@ -140,6 +164,8 @@ for one run.
 max_len: 120
 skip_golines: false
 skip_readability: false
+advice: false
+advice_fail: false
 include_hidden: false
 go_toolchain: local
 exclude: []

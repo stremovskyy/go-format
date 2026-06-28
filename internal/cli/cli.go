@@ -9,8 +9,10 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/stremovskyy/go-format/internal/advice"
 	appconfig "github.com/stremovskyy/go-format/internal/config"
 	"github.com/stremovskyy/go-format/internal/formatrunner"
+	"github.com/stremovskyy/go-format/internal/readability"
 )
 
 var Version = "dev"
@@ -21,6 +23,7 @@ Usage:
   go-format --write [--config path] [--no-config] [--list] [--jobs N] [--max-len N] [path ...]
   go-format --check [--config path] [--no-config] [--list] [--diff=false] [--jobs N] [--max-len N] [path ...]
   go-format --stdin [--config path] [--no-config] [--stdin-path file.go]
+  go-format --advice [--advice-fail] [path ...]
   go-format --init [--config path]
   go-format --print-config [--config path]
   go-format --version
@@ -58,6 +61,8 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	)
 	skipGolines := fs.Bool("skip-golines", false, "skip golines wrapping")
 	skipReadability := fs.Bool("skip-readability", false, "skip logical blank-line formatting")
+	adviceFlag := fs.Bool("advice", false, "print non-mutating optimization advice")
+	adviceFailFlag := fs.Bool("advice-fail", false, "exit with status 1 when advice issues are found")
 	includeHidden := fs.Bool("include-hidden", false, "include hidden directories other than .git")
 	progress := fs.Bool("progress", true, "print file progress to stderr")
 	stdinMode := fs.Bool("stdin", false, "format Go source from stdin and write to stdout")
@@ -116,7 +121,18 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		}
 
 		cfg := defaults
-		applyConfigOverrides(&cfg, setFlags, *maxLen, *goToolchain, *skipGolines, *skipReadability, *includeHidden)
+		applyConfigOverrides(
+			&cfg,
+			setFlags,
+			*maxLen,
+			*goToolchain,
+			*skipGolines,
+			*skipReadability,
+			*adviceFlag,
+			*adviceFailFlag,
+			*includeHidden,
+		)
+		normalizeConfig(&cfg)
 
 		if err := appconfig.WriteFile(initTarget, cfg); err != nil {
 			fmt.Fprintf(stderr, "go-format: %v\n", err)
@@ -136,7 +152,18 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		return 1
 	}
 
-	applyConfigOverrides(&cfg, setFlags, *maxLen, *goToolchain, *skipGolines, *skipReadability, *includeHidden)
+	applyConfigOverrides(
+		&cfg,
+		setFlags,
+		*maxLen,
+		*goToolchain,
+		*skipGolines,
+		*skipReadability,
+		*adviceFlag,
+		*adviceFailFlag,
+		*includeHidden,
+	)
+	normalizeConfig(&cfg)
 
 	if *printConfig {
 		body, err := appconfig.Marshal(cfg)
@@ -199,12 +226,29 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 			return 1
 		}
 
+		if cfg.Advice {
+			issues, err := advice.Analyze(*stdinPath, formatted)
+			if err != nil {
+				fmt.Fprintf(stderr, "go-format: %v\n", err)
+
+				return 1
+			}
+
+			printIssues(stderr, adviceOnly(issues))
+
+			if cfg.AdviceFail && len(adviceOnly(issues)) > 0 {
+				fmt.Fprintf(stderr, "go-format: %d advice issue(s) found\n", len(adviceOnly(issues)))
+
+				return 1
+			}
+		}
+
 		return 0
 	}
 
 	mode := formatrunner.Write
 
-	if *check {
+	if *check || (cfg.Advice && !*write) {
 		mode = formatrunner.Check
 	}
 
@@ -225,6 +269,8 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		Jobs:            *jobs,
 		SkipGoLines:     cfg.SkipGoLines,
 		SkipReadability: cfg.SkipReadability,
+		Advice:          cfg.Advice,
+		AdviceFail:      cfg.AdviceFail,
 		IncludeHidden:   cfg.IncludeHidden,
 		Exclude:         cfg.Exclude,
 		Diff:            *printDiff,
@@ -240,6 +286,8 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		printFiles(stdout, result.ChangedFiles)
 	}
 
+	printIssues(stderr, adviceOnly(result.Issues))
+
 	if err != nil {
 		var checkErr formatrunner.CheckFailedError
 
@@ -249,6 +297,14 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 				"go-format: %d file(s) need formatting; run go-format --write\n",
 				len(checkErr.ChangedFiles),
 			)
+
+			return 1
+		}
+
+		var adviceErr formatrunner.AdviceFailedError
+
+		if errors.As(err, &adviceErr) {
+			fmt.Fprintf(stderr, "go-format: %d advice issue(s) found\n", len(adviceErr.Issues))
 
 			return 1
 		}
@@ -345,6 +401,24 @@ func printFiles(stdout io.Writer, files []string) {
 	}
 }
 
+func printIssues(stderr io.Writer, issues []readability.Issue) {
+	for _, issue := range issues {
+		fmt.Fprintf(stderr, "%s:%d: %s: %s\n", issue.File, issue.Line, issue.Rule, issue.Message)
+	}
+}
+
+func adviceOnly(issues []readability.Issue) []readability.Issue {
+	filtered := make([]readability.Issue, 0, len(issues))
+
+	for _, issue := range issues {
+		if !issue.Fixable {
+			filtered = append(filtered, issue)
+		}
+	}
+
+	return filtered
+}
+
 func visitedFlags(fs *flag.FlagSet) map[string]bool {
 	flags := map[string]bool{}
 	fs.Visit(func(flag *flag.Flag) {
@@ -387,6 +461,8 @@ func applyConfigOverrides(
 	goToolchain string,
 	skipGolines bool,
 	skipReadability bool,
+	advice bool,
+	adviceFail bool,
 	includeHidden bool,
 ) {
 	if setFlags["max-len"] {
@@ -405,8 +481,22 @@ func applyConfigOverrides(
 		cfg.SkipReadability = skipReadability
 	}
 
+	if setFlags["advice"] {
+		cfg.Advice = advice
+	}
+
+	if setFlags["advice-fail"] {
+		cfg.AdviceFail = adviceFail
+	}
+
 	if setFlags["include-hidden"] {
 		cfg.IncludeHidden = includeHidden
+	}
+}
+
+func normalizeConfig(cfg *appconfig.Config) {
+	if cfg.AdviceFail {
+		cfg.Advice = true
 	}
 }
 
