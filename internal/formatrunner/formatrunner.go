@@ -14,6 +14,7 @@ import (
 
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/stremovskyy/go-format/internal/advice"
+	"github.com/stremovskyy/go-format/internal/mutate"
 	"github.com/stremovskyy/go-format/internal/readability"
 	gofumpt "mvdan.cc/gofumpt/format"
 )
@@ -36,6 +37,7 @@ type Options struct {
 	SkipReadability bool
 	Advice          bool
 	AdviceFail      bool
+	Mutate          bool
 	Jobs            int
 	Diff            bool
 	DiffMaxBytes    int
@@ -306,6 +308,8 @@ func reportProgress(progress func(ProgressEvent), event ProgressEvent) {
 func FormatSource(path string, src []byte, opts Options) ([]byte, []readability.Issue, error) {
 	opts = normalizeOptions(opts)
 
+	var issues []readability.Issue
+
 	formatted, err := goformat.Source(src)
 	if err != nil {
 		return nil, nil, fmt.Errorf("gofmt %s: %w", path, err)
@@ -323,13 +327,31 @@ func FormatSource(path string, src []byte, opts Options) ([]byte, []readability.
 		return nil, nil, fmt.Errorf("gofumpt %s: %w", path, err)
 	}
 
-	var issues []readability.Issue
+	if opts.Mutate {
+		var mutationIssues []readability.Issue
 
-	if !opts.SkipReadability {
-		formatted, issues, err = readability.Rewrite(path, formatted)
+		formatted, mutationIssues, err = mutate.Rewrite(path, formatted)
 		if err != nil {
 			return nil, nil, err
 		}
+
+		issues = append(issues, mutationIssues...)
+
+		formatted, err = gofumpt.Source(formatted, gofumpt.Options{})
+		if err != nil {
+			return nil, nil, fmt.Errorf("gofumpt after mutate %s: %w", path, err)
+		}
+	}
+
+	if !opts.SkipReadability {
+		var readabilityIssues []readability.Issue
+
+		formatted, readabilityIssues, err = readability.Rewrite(path, formatted)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		issues = append(issues, readabilityIssues...)
 
 		formatted, err = gofumpt.Source(formatted, gofumpt.Options{})
 		if err != nil {

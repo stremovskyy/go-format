@@ -19,6 +19,7 @@ type Config struct {
 	SkipReadability bool     `yaml:"skip_readability"`
 	Advice          bool     `yaml:"advice"`
 	AdviceFail      bool     `yaml:"advice_fail"`
+	Mutate          bool     `yaml:"mutate"`
 	IncludeHidden   bool     `yaml:"include_hidden"`
 	GoToolchain     string   `yaml:"go_toolchain"`
 	Exclude         []string `yaml:"exclude"`
@@ -30,6 +31,7 @@ type fileConfig struct {
 	SkipReadability *bool    `yaml:"skip_readability"`
 	Advice          *bool    `yaml:"advice"`
 	AdviceFail      *bool    `yaml:"advice_fail"`
+	Mutate          *bool    `yaml:"mutate"`
 	IncludeHidden   *bool    `yaml:"include_hidden"`
 	GoToolchain     *string  `yaml:"go_toolchain"`
 	Exclude         []string `yaml:"exclude"`
@@ -97,6 +99,10 @@ func Decode(reader io.Reader, base Config) (Config, error) {
 
 	if raw.AdviceFail != nil {
 		cfg.AdviceFail = *raw.AdviceFail
+	}
+
+	if raw.Mutate != nil {
+		cfg.Mutate = *raw.Mutate
 	}
 
 	if raw.IncludeHidden != nil {

@@ -23,6 +23,7 @@ Usage:
   go-format --write [--config path] [--no-config] [--list] [--jobs N] [--max-len N] [path ...]
   go-format --check [--config path] [--no-config] [--list] [--diff=false] [--jobs N] [--max-len N] [path ...]
   go-format --stdin [--config path] [--no-config] [--stdin-path file.go]
+  go-format --mutate [path ...]
   go-format --advice [--advice-fail] [path ...]
   go-format --init [--config path]
   go-format --print-config [--config path]
@@ -63,6 +64,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	skipReadability := fs.Bool("skip-readability", false, "skip logical blank-line formatting")
 	adviceFlag := fs.Bool("advice", false, "print non-mutating optimization advice")
 	adviceFailFlag := fs.Bool("advice-fail", false, "exit with status 1 when advice issues are found")
+	mutateFlag := fs.Bool("mutate", false, "apply safe code mutations in addition to formatting")
 	includeHidden := fs.Bool("include-hidden", false, "include hidden directories other than .git")
 	progress := fs.Bool("progress", true, "print file progress to stderr")
 	stdinMode := fs.Bool("stdin", false, "format Go source from stdin and write to stdout")
@@ -130,6 +132,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 			*skipReadability,
 			*adviceFlag,
 			*adviceFailFlag,
+			*mutateFlag,
 			*includeHidden,
 		)
 		normalizeConfig(&cfg)
@@ -161,6 +164,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		*skipReadability,
 		*adviceFlag,
 		*adviceFailFlag,
+		*mutateFlag,
 		*includeHidden,
 	)
 	normalizeConfig(&cfg)
@@ -213,6 +217,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 			GoToolchain:     cfg.GoToolchain,
 			SkipGoLines:     cfg.SkipGoLines,
 			SkipReadability: cfg.SkipReadability,
+			Mutate:          cfg.Mutate,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "go-format: %v\n", err)
@@ -271,6 +276,7 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		SkipReadability: cfg.SkipReadability,
 		Advice:          cfg.Advice,
 		AdviceFail:      cfg.AdviceFail,
+		Mutate:          cfg.Mutate,
 		IncludeHidden:   cfg.IncludeHidden,
 		Exclude:         cfg.Exclude,
 		Diff:            *printDiff,
@@ -463,6 +469,7 @@ func applyConfigOverrides(
 	skipReadability bool,
 	advice bool,
 	adviceFail bool,
+	mutate bool,
 	includeHidden bool,
 ) {
 	if setFlags["max-len"] {
@@ -487,6 +494,10 @@ func applyConfigOverrides(
 
 	if setFlags["advice-fail"] {
 		cfg.AdviceFail = adviceFail
+	}
+
+	if setFlags["mutate"] {
+		cfg.Mutate = mutate
 	}
 
 	if setFlags["include-hidden"] {

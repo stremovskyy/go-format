@@ -13,6 +13,7 @@ It runs:
 - pinned `golines` for long-line wrapping
 - `gofumpt`
 - a logical blank-line pass for dense functions
+- optional safe source mutations
 - optional non-mutating optimization advice
 
 The blank-line pass separates guard clauses, validation and normalization,
@@ -77,6 +78,18 @@ Print non-mutating optimization advice:
 
 ```sh
 go-format --advice ./...
+```
+
+Preview safe code mutations without writing files:
+
+```sh
+go-format --check --mutate ./...
+```
+
+Apply safe code mutations:
+
+```sh
+go-format --write --mutate ./...
 ```
 
 Fail CI when advice issues are found:
@@ -145,6 +158,13 @@ Go module and user cache. Later runs reuse the cached `golines` binary. Use
 `--skip-golines` for environments that must avoid that subprocess. Use
 `--skip-readability` to disable only the logical blank-line pass.
 
+`--mutate` applies conservative source mutations after normal formatting and
+before the readability pass. The first mutation set generates placeholder GoDoc
+comments for undocumented exported top-level symbols, rewrites simple
+`fmt.Errorf("... %v", err)` calls to use `%w`, and simplifies direct
+`if condition { return true } return false` bool chains. In `--check` mode,
+these mutations are shown as diffs and are not written.
+
 `--advice` prints non-mutating optimization findings to standard error. Without
 an explicit `--write`, advice runs in check mode and does not rewrite files.
 Advice includes struct padding opportunities, inconsistent receiver names,
@@ -166,6 +186,7 @@ skip_golines: false
 skip_readability: false
 advice: false
 advice_fail: false
+mutate: false
 include_hidden: false
 go_toolchain: local
 exclude: []

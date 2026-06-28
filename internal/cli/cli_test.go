@@ -275,6 +275,51 @@ func active(enabled bool) bool {
 	}
 }
 
+func TestRunMutateCheckShowsDiffWithoutWriting(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+	original := `package sample
+
+type Config struct{}
+`
+
+	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithIO(
+		[]string{"--check", "--mutate", "--skip-golines", "--skip-readability", "--progress=false", root},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+
+	if code != 1 {
+		t.Fatalf(
+			"RunWithIO --check --mutate code = %d, want check failure\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+
+	if !strings.Contains(stdout.String(), "+// Config ...") {
+		t.Fatalf("stdout missing mutation diff:\n%s", stdout.String())
+	}
+
+	body, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	if string(body) != original {
+		t.Fatalf("--check --mutate rewrote file:\n%s", body)
+	}
+}
+
 func TestRunAdviceFailReturnsNonZero(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "main.go")

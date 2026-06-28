@@ -17,6 +17,7 @@ skip_golines: true
 skip_readability: true
 advice: true
 advice_fail: true
+mutate: true
 include_hidden: true
 go_toolchain: auto
 exclude:
@@ -35,7 +36,7 @@ exclude:
 		t.Fatalf("MaxLen = %d, want 100", cfg.MaxLen)
 	}
 
-	if !cfg.SkipGoLines || !cfg.SkipReadability || !cfg.Advice || !cfg.AdviceFail || !cfg.IncludeHidden {
+	if !cfg.SkipGoLines || !cfg.SkipReadability || !cfg.Advice || !cfg.AdviceFail || !cfg.Mutate || !cfg.IncludeHidden {
 		t.Fatalf("bool config not applied: %#v", cfg)
 	}
 

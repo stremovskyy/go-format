@@ -2,12 +2,14 @@
 
 `go-format` is meant for Go projects that already trust `gofmt`, but want a
 single command that also handles long lines, stricter formatting, a readability
-pass for dense code, and optional non-mutating optimization advice.
+pass for dense code, optional safe source mutations, and non-mutating
+optimization advice.
 
 The output is still ordinary Go source. The tool does not rewrite architecture,
 rename symbols, reorder logic, or insert blank lines between every statement.
 Advice mode follows the same safety rule: it reports opportunities but does not
-move symbols, split files, reorder fields, or change source bytes.
+move symbols, split files, reorder fields, or change source bytes. `--mutate`
+is the explicit opt-in path for conservative source rewrites.
 
 ## Common Commands
 
@@ -51,6 +53,18 @@ Print advice without failing:
 
 ```sh
 go-format --advice ./...
+```
+
+Preview safe mutations without writing files:
+
+```sh
+go-format --check --mutate ./...
+```
+
+Apply safe mutations:
+
+```sh
+go-format --write --mutate ./...
 ```
 
 Fail CI on advice issues:
@@ -127,6 +141,50 @@ func active(enabled bool, count int) bool {
 
 This is better when a function mixes guard clauses, normalization, setup,
 locking, loops, and a final return. Each section becomes easier to scan.
+
+### Safe Mutations
+
+`--mutate` applies narrowly scoped source rewrites. It can add placeholder GoDoc
+comments for undocumented exported top-level symbols, wrap simple
+`fmt.Errorf("... %v", err)` calls with `%w`, and simplify direct bool returns:
+
+```go
+type Config struct{}
+
+func load() error {
+	if err := read(); err != nil {
+		return fmt.Errorf("read: %v", err)
+	}
+	return nil
+}
+
+func enabled(ok bool) bool {
+	if ok {
+		return true
+	}
+	return false
+}
+```
+
+With `--mutate`, that becomes:
+
+```go
+// Config ...
+type Config struct{}
+
+func load() error {
+	if err := read(); err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	return nil
+}
+
+func enabled(ok bool) bool {
+	return ok
+}
+```
+
+Use `--check --mutate` first when adopting this in an existing repository.
 
 ### readability Logical Groups
 

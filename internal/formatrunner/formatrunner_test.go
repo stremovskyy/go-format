@@ -386,6 +386,76 @@ func active(enabled bool) bool {
 	}
 }
 
+func TestFormatSourceAppliesMutationsWhenEnabled(t *testing.T) {
+	input := []byte(`package sample
+
+type Config struct{}
+
+func active(enabled bool) bool {
+	if enabled {
+		return true
+	}
+	return false
+}
+`)
+
+	output, issues, err := FormatSource("sample.go", input, Options{
+		GoToolchain:     "local",
+		SkipGoLines:     true,
+		SkipReadability: true,
+		Mutate:          true,
+	})
+	if err != nil {
+		t.Fatalf("FormatSource mutate error = %v", err)
+	}
+
+	got := string(output)
+
+	if !strings.Contains(got, "// Config ...\ntype Config struct{}") {
+		t.Fatalf("output missing generated doc stub:\n%s", got)
+	}
+
+	if !strings.Contains(got, "return enabled") {
+		t.Fatalf("output missing simplified bool return:\n%s", got)
+	}
+
+	if len(issues) != 2 {
+		t.Fatalf("issues = %#v, want two mutation issues", issues)
+	}
+}
+
+func TestFormatSourceKeepsMutationAndReadabilityIssues(t *testing.T) {
+	input := []byte(`package sample
+
+type Config struct{}
+func active(enabled bool) int {
+	if !enabled {
+		return 0
+	}
+	value := 1
+	return value
+}
+`)
+
+	_, issues, err := FormatSource("sample.go", input, Options{
+		GoToolchain: "local",
+		SkipGoLines: true,
+		Mutate:      true,
+	})
+	if err != nil {
+		t.Fatalf("FormatSource mutate/readability error = %v", err)
+	}
+
+	var rules []string
+	for _, issue := range issues {
+		rules = append(rules, issue.Rule)
+	}
+
+	if !reflect.DeepEqual(rules, []string{"doc-stub", "logical-block-spacing", "logical-block-spacing"}) {
+		t.Fatalf("issue rules = %#v, want mutation and readability issues", rules)
+	}
+}
+
 func TestRunCheckCanSkipDiffGeneration(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "main.go")
