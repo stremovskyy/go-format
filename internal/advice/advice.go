@@ -270,7 +270,11 @@ func checkFunctionCalls(fn *ast.FuncDecl, add func(token.Pos, string, string)) {
 		}
 
 		if selectorName(call.Fun) == "regexp.MustCompile" {
-			add(call.Pos(), "regexp-mustcompile", "regexp.MustCompile inside function should be hoisted to package scope")
+			add(
+				call.Pos(),
+				"regexp-mustcompile",
+				"regexp.MustCompile inside function should be hoisted to package scope",
+			)
 		}
 
 		return true

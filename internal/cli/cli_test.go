@@ -206,7 +206,12 @@ type Config struct{}
 	)
 
 	if code != 0 {
-		t.Fatalf("RunWithIO --advice code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+		t.Fatalf(
+			"RunWithIO --advice code = %d, want 0\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
 	}
 
 	if !strings.Contains(stderr.String(), file+":3: exported-doc: exported type Config should have a doc comment") {
@@ -248,7 +253,12 @@ func active(enabled bool) bool {
 	)
 
 	if code != 1 {
-		t.Fatalf("RunWithIO --advice dirty code = %d, want formatting check failure\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+		t.Fatalf(
+			"RunWithIO --advice dirty code = %d, want formatting check failure\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
 	}
 
 	body, err := os.ReadFile(file)
@@ -287,7 +297,12 @@ type Config struct{}
 	)
 
 	if code != 1 {
-		t.Fatalf("RunWithIO --advice-fail code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+		t.Fatalf(
+			"RunWithIO --advice-fail code = %d, want 1\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
 	}
 
 	if !strings.Contains(stderr.String(), file+":3: exported-doc: exported type Config should have a doc comment") {
@@ -395,7 +410,12 @@ type Config struct{}
 	)
 
 	if code != 1 {
-		t.Fatalf("RunWithIO advice config code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+		t.Fatalf(
+			"RunWithIO advice config code = %d, want 1\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
 	}
 
 	if !strings.Contains(stderr.String(), "main.go:3: exported-doc: exported type Config should have a doc comment") {
@@ -528,7 +548,12 @@ type Config struct{}
 	)
 
 	if code != 0 {
-		t.Fatalf("RunWithIO stdin advice code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+		t.Fatalf(
+			"RunWithIO stdin advice code = %d, want 0\nstdout:\n%s\nstderr:\n%s",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
 	}
 
 	if !strings.Contains(stdout.String(), "type Config struct{}") {
